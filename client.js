@@ -242,7 +242,8 @@ html[data-windows-titlebar] .dsh-tab-pagebar:not([data-orientation=vertical]){to
   box-shadow:0 0 0 .5px hsl(var(--dsh-tab-group-hue, 214) 60% 32% / .35)}
 .dsh-tab-pagebar__group[data-collapsed=true] .dsh-tab-pagebar__group-chip{margin-right:0;height:28px;line-height:28px}
 .dsh-tab-pagebar__group[data-active=true] .dsh-tab-pagebar__group-chip{box-shadow:0 0 0 1.5px hsl(var(--dsh-tab-group-hue, 214) 65% 42% / .35)}
-.dsh-tab-pagebar__group-chip:hover{filter:brightness(1.08)}
+.dsh-tab-pagebar__group-chip:hover,
+.dsh-tab-pagebar[data-orientation=vertical] .dsh-tab-pagebar__group:has(> .dsh-tab-pagebar__group-chip:hover)::after{filter:brightness(1.08)}
 .dsh-tab-pagebar__group-chip{-webkit-app-region:no-drag}
 .dsh-tab-pagebar__group-chip:focus-visible{outline:1.5px solid var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-offset:1px}
 .dsh-tab-pagebar__group-name{overflow:hidden;text-overflow:ellipsis}
@@ -339,9 +340,12 @@ html[data-windows-titlebar] .dsh-tab-pagebar:not([data-orientation=vertical]){to
 .dsh-tab-pagebar[data-orientation=vertical] .dsh-tab-pagebar__divider{display:block;width:auto;height:1px;margin:3px 4px}
 .dsh-tab-pagebar[data-orientation=vertical] .dsh-tab-pagebar__group{display:block;height:auto;padding:0 0 0 4px;
   margin:2px 0;border-radius:0}
-.dsh-tab-pagebar[data-orientation=vertical] .dsh-tab-pagebar__group::after{inset:0 auto 0 1px;width:2px;height:auto}
-.dsh-tab-pagebar[data-orientation=vertical] .dsh-tab-pagebar__group-chip{height:auto;min-height:19px;max-width:100%;
-  margin:0 0 1px;padding:1px 6px;line-height:14px;border-radius:6px}
+/* 组头的左下直角接住色线，上端藏在组头圆角内侧。 */
+.dsh-tab-pagebar[data-orientation=vertical] .dsh-tab-pagebar__group::after{inset:6px auto 0 1px;width:2px;height:auto}
+.dsh-tab-pagebar[data-orientation=vertical] .dsh-tab-pagebar__group > .dsh-tab-pagebar__group-chip{position:relative;z-index:1;
+  height:auto;min-height:19px;max-width:100%;margin:0 0 1px -3px;padding:1px 6px 1px 9px;
+  line-height:14px;border-radius:6px 6px 6px 0;box-shadow:none}
+.dsh-tab-pagebar[data-orientation=vertical] .dsh-tab-pagebar__group-chip:focus-visible{outline-offset:-2px}
 .dsh-tab-pagebar[data-orientation=vertical] .dsh-tab-pagebar__group-name{white-space:normal;overflow-wrap:anywhere}
 .dsh-tab-pagebar[data-orientation=vertical] .dsh-tab-pagebar__tab[data-group-workspace]::before{display:none}
 .dsh-tab-pagebar[data-orientation=vertical] .dsh-tab-pagebar__tab[data-drop=before]{box-shadow:inset 0 2px var(--dsw-alias-state-business-primary)}
