@@ -343,7 +343,7 @@ html[data-windows-titlebar] .dsh-tab-pagebar:not([data-orientation=vertical]){to
 /* 组头的左下直角接住色线，上端藏在组头圆角内侧。 */
 .dsh-tab-pagebar[data-orientation=vertical] .dsh-tab-pagebar__group::after{inset:6px auto 0 1px;width:2px;height:auto}
 .dsh-tab-pagebar[data-orientation=vertical] .dsh-tab-pagebar__group > .dsh-tab-pagebar__group-chip{position:relative;z-index:1;
-  height:auto;min-height:19px;max-width:100%;margin:0 0 1px -3px;padding:1px 6px 1px 9px;
+  height:auto;min-height:19px;max-width:100%;margin:0 0 1px -3px;padding:1px 6px;
   line-height:14px;border-radius:6px 6px 6px 0;box-shadow:none}
 .dsh-tab-pagebar[data-orientation=vertical] .dsh-tab-pagebar__group-chip:focus-visible{outline-offset:-2px}
 .dsh-tab-pagebar[data-orientation=vertical] .dsh-tab-pagebar__group-name{white-space:normal;overflow-wrap:anywhere}
