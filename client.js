@@ -8,8 +8,7 @@
  * ## 外观
  * 书页标签：标签栏是一条比页面底色浅一号的「书脊」，选中的标签抬到页面底色、
  * 左右描边、不画底部横线，直接和下面的会话页连成一张纸。标签宽度跟着标题文字
- * 自适应（不留空白），普通标签最多 180px，激活标签最多 270px（1.5 倍），
- * 标题长才展开到上限。固定标签只显示图标。
+ * 自适应，普通标签最多 180px，切换时尺寸不变。固定标签只显示图标。
  *
  * ## 右键菜单
  * 关闭标签页 / 关闭右侧标签页 / 关闭其他标签页 / 关闭全部标签页 /
@@ -45,6 +44,7 @@ window.__ModuleLoader__.load({
     const STORAGE_KEY = 'dsh.tab.view.v2'
     const COLLAPSED_GROUPS_KEY = 'dsh.tab.groups.collapsed.v1'
     const LEGACY_STORAGE_KEY = 'dsh.tab.openSessions.v1'
+    const EMPTY_PANEL_ID = 'dsh-tab.empty'
 
     // ── 文案（官方 locale 命名空间；en 为必填回退） ──────────────────────────
     const ZH = {
@@ -74,6 +74,9 @@ window.__ModuleLoader__.load({
       'menu.archiveFailed': '归档失败：{message}',
       'menu.retryStop': '停止并重试',
       'menu.cancel': '取消',
+      'settings.reopenAfterClose': '关闭最后一个标签后自动打开会话',
+      'settings.closeDraftTabs': '离开新会话时自动关闭草稿标签',
+      'settings.save': '保存',
     }
     const EN = {
       'tab.list': 'Conversation tabs',
@@ -102,6 +105,9 @@ window.__ModuleLoader__.load({
       'menu.archiveFailed': 'Archive failed: {message}',
       'menu.retryStop': 'Stop and retry',
       'menu.cancel': 'Cancel',
+      'settings.reopenAfterClose': 'Open a session after closing the last tab',
+      'settings.closeDraftTabs': 'Close draft tabs when leaving a new session',
+      'settings.save': 'Save',
     }
 
     // ── 帧布局（把 shell.bottom 那行搬到三栏上方，横跨会话列 + 右栏列） ─────
@@ -145,6 +151,16 @@ div:has(> [data-shell-bottom]):has(> [data-shell-overlay]) > [data-side] {
 [data-windows-titlebar] div:has(> [data-shell-bottom]) > :nth-child(2) {
   border-top-left-radius: 0 !important;
 }
+/* 空白主面板跨到右栏，原会话的右栏暂时隐藏，返回后沿用原布局。 */
+div:has(> [data-shell-bottom]):has(> [data-shell-overlay]) > :has([data-global-panel] [data-dsh-tab-empty-main]) {
+  grid-column: 2 / -1 !important;
+}
+div:has(> [data-shell-overlay]):has([data-dsh-tab-empty-main]) > :is([data-rightbar-col],[data-side=rightbar]) {
+  visibility: hidden;
+}
+div[data-rightbar-fullscreen]:has(> [data-shell-overlay]):has([data-dsh-tab-empty-main]) {
+  grid-template-rows: 44px minmax(0, 1fr) auto !important;
+}
 `
 
     // ── 标签栏外观（书页标签 + 右键菜单） ──────────────────────────────────
@@ -161,10 +177,13 @@ div:has(> [data-shell-bottom]):has(> [data-shell-overlay]) > [data-side] {
 [data-sidebar-drawer] .dsh-tab-pagebar{left:var(--dsh-frame-leading-clearance, 0px)}
 html[data-windows-titlebar] .dsh-tab-pagebar{top:var(--dsh-windows-titlebar-height, 0px);
   border-top-left-radius:var(--dsh-windows-content-radius, 16px);corner-shape:round}
-[data-rightbar-fullscreen] .dsh-tab-pagebar{display:none}
+[data-rightbar-fullscreen] .dsh-tab-pagebar:not([data-main-empty=true]){display:none}
 .dsh-tab-pagebar__strip{display:flex;align-items:flex-end;flex:0 1 auto;min-width:0;
-  height:100%;overflow-x:auto;overflow-y:hidden;scrollbar-width:none;scroll-padding-inline:8px}
-.dsh-tab-pagebar__strip::-webkit-scrollbar{display:none}
+  height:100%;overflow-x:auto;overflow-y:hidden;scroll-padding-inline:8px;-webkit-app-region:no-drag}
+.dsh-tab-pagebar__strip::-webkit-scrollbar{height:6px}
+.dsh-tab-pagebar__strip::-webkit-scrollbar-thumb{border-radius:6px;background:var(--dsw-alias-label-dimmed)}
+.dsh-tab-pagebar__strip::-webkit-scrollbar-thumb:hover{background:var(--dsw-alias-label-tertiary)}
+@supports not selector(::-webkit-scrollbar){.dsh-tab-pagebar__strip{scrollbar-width:thin}}
 /* 短标签：书脊上的一张纸签 */
 .dsh-tab-pagebar__tab{position:relative;box-sizing:border-box;display:flex;align-items:center;gap:7px;
   flex:0 1 auto;min-width:72px;max-width:var(--dsh-tab-max-width);height:32px;padding:0 6px 0 12px;
@@ -174,10 +193,7 @@ html[data-windows-titlebar] .dsh-tab-pagebar{top:var(--dsh-windows-titlebar-heig
   animation:dsh-tab-enter .16s ease;
   transition:background-color .1s ease,color .1s ease,border-color .1s ease,box-shadow .1s ease}
 .dsh-tab-pagebar__tab:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-secondary)}
-/* 选中标签：抬到页面底色、不画底边线，和下面的会话页连成一张纸；
-   可用宽度是普通标签的 1.5 倍（180 → 270），标题短就按实际文字宽度收住、不留空白，
-   标题长才展开到 1.5 倍。切换时宽度和高度一起过渡
-   （只保留上方圆角，底部直角直接接页面，不再做额外的反圆角装饰） */
+/* 选中标签通过底色和上方圆角与会话区相连，宽高和位置不变。 */
 .dsh-tab-pagebar__tab[aria-selected=true]{z-index:1;background:var(--dsw-alias-bg-base);
   border-color:var(--dsw-alias-border-l2);border-radius:8px 8px 0 0;color:var(--dsw-alias-label-primary);
   box-shadow:0 2px 8px 0 rgba(15,20,40,.07)}
@@ -258,6 +274,7 @@ html[data-windows-titlebar] .dsh-tab-pagebar{top:var(--dsh-windows-titlebar-heig
   transition:background-color .12s ease,color .12s ease}
 .dsh-tab-pagebar__new:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
 .dsh-tab-pagebar__new:focus-visible{outline:1.5px solid var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-offset:1px}
+
 /* 右键菜单 */
 .dsh-tab-menu{position:fixed;z-index:100;box-sizing:border-box;min-width:188px;max-width:260px;padding:5px;
   border:.5px solid var(--dsw-alias-border-l2);border-radius:var(--dsw-radius-md);
@@ -370,6 +387,13 @@ html[data-windows-titlebar] .dsh-tab-pagebar{top:var(--dsh-windows-titlebar-heig
       return ids
     }
 
+    function tabSettingsOf(value) {
+      return Object.freeze({
+        reopenAfterClose: value?.reopenAfterClose !== false,
+        closeDraftTabs: value?.closeDraftTabs === true,
+      })
+    }
+
     function readStoredState() {
       try {
         const raw = localStorage.getItem(STORAGE_KEY)
@@ -378,28 +402,36 @@ html[data-windows-titlebar] .dsh-tab-pagebar{top:var(--dsh-windows-titlebar-heig
           if (value !== null && typeof value === 'object') {
             const ids = sanitizeIds(value.tabs)
             const pinned = sanitizeIds(value.pinned).filter((id) => ids.includes(id))
-            return { ids, pinned }
+            const drafts = sanitizeIds(value.drafts).filter((id) => ids.includes(id))
+            return { ids, pinned, drafts, settings: tabSettingsOf(value.settings) }
           }
         }
         const legacy = localStorage.getItem(LEGACY_STORAGE_KEY)
-        if (legacy !== null) return { ids: sanitizeIds(JSON.parse(legacy)), pinned: [] }
+        if (legacy !== null) return { ids: sanitizeIds(JSON.parse(legacy)), pinned: [], drafts: [], settings: tabSettingsOf() }
       } catch (error) {
         /* 存储不可用 / 内容损坏：从空列表开始，标签页只是视图态 */
       }
-      return { ids: [], pinned: [] }
+      return { ids: [], pinned: [], drafts: [], settings: tabSettingsOf() }
     }
 
     function createTabStore() {
       const stored = readStoredState()
       let ids = stored.ids
       let pinned = stored.pinned
-      const suppressed = new Set()
-      let snapshot = Object.freeze({ ids: Object.freeze(ids.slice()), pinned: Object.freeze(pinned.slice()) })
+      let settings = stored.settings
+      // 仅记录已确认有草稿的标签；仅附件的草稿由原生页面持有，刷新后随附件一起退出标签记录。
+      const drafts = new Map(stored.drafts.map((id) => [id, true]))
+      const suppressed = new Map()
+      const makeSnapshot = () => Object.freeze({ ids: Object.freeze(ids.slice()), pinned: Object.freeze(pinned.slice()), settings })
+      let snapshot = makeSnapshot()
       const listeners = new Set()
       const publish = () => {
-        snapshot = Object.freeze({ ids: Object.freeze(ids.slice()), pinned: Object.freeze(pinned.slice()) })
+        snapshot = makeSnapshot()
         try {
-          localStorage.setItem(STORAGE_KEY, JSON.stringify({ tabs: ids, pinned }))
+          const savedIds = ids.filter((id) => drafts.get(id) !== false)
+          const savedPinned = pinned.filter((id) => drafts.get(id) !== false)
+          const savedDrafts = [...drafts].filter(([, durable]) => durable).map(([id]) => id)
+          localStorage.setItem(STORAGE_KEY, JSON.stringify({ tabs: savedIds, pinned: savedPinned, drafts: savedDrafts, settings }))
           localStorage.removeItem(LEGACY_STORAGE_KEY)
         } catch (error) {
           /* 无痕模式 / 存储禁用：标签页只是视图态，存不进不影响会话数据 */
@@ -417,9 +449,21 @@ html[data-windows-titlebar] .dsh-tab-pagebar{top:var(--dsh-windows-titlebar-heig
         has(id) {
           return ids.includes(id)
         },
-        add(id) {
-          if (ids.includes(id)) return
-          ids = [...ids, id]
+        add(id, draft) {
+          const exists = ids.includes(id)
+          if (exists && drafts.get(id) === draft) return
+          if (!exists) ids = [...ids, id]
+          if (draft === undefined) drafts.delete(id)
+          else drafts.set(id, draft)
+          publish()
+        },
+        hasDraft(id) {
+          return drafts.has(id)
+        },
+        setSettings(value) {
+          const next = tabSettingsOf(value)
+          if (settings.reopenAfterClose === next.reopenAfterClose && settings.closeDraftTabs === next.closeDraftTabs) return
+          settings = next
           publish()
         },
         pin(id) {
@@ -434,9 +478,10 @@ html[data-windows-titlebar] .dsh-tab-pagebar{top:var(--dsh-windows-titlebar-heig
         },
         removeMany(removed) {
           const drop = new Set(removed)
-          if (drop.size === 0) return
+          if (!ids.some((id) => drop.has(id))) return
           ids = ids.filter((item) => !drop.has(item))
           pinned = pinned.filter((item) => !drop.has(item))
+          for (const id of drop) drafts.delete(id)
           publish()
         },
         /** 固定分组内拖动排序（referenceId 目标标签，place 表示放在它前/后）。 */
@@ -459,18 +504,22 @@ html[data-windows-titlebar] .dsh-tab-pagebar{top:var(--dsh-windows-titlebar-heig
           ids = next
           publish()
         },
-        /** 主动关掉的标签不要再被「当前会话自动入签」立刻加回来。 */
-        suppress(id) {
-          suppressed.add(id)
+        /** 主动关掉的标签不立即加回。保留原生编辑器时，继续编辑或发送就可以重新入签。 */
+        suppress(id, draft) {
+          suppressed.set(id, draft === undefined ? null : { revision: draft.draftRev, attachments: draft.attachmentIds })
         },
-        isSuppressed(id) {
-          return suppressed.has(id)
+        isSuppressed(id, draft) {
+          const closed = suppressed.get(id)
+          if (closed === undefined) return false
+          if (closed === null || (draft?.draftRev === closed.revision && draft?.attachmentIds === closed.attachments)) return true
+          suppressed.delete(id)
+          return false
         },
         unsuppress(id) {
           suppressed.delete(id)
         },
         pruneSuppressed(keepId) {
-          for (const id of suppressed) if (id !== keepId) suppressed.delete(id)
+          for (const id of suppressed.keys()) if (id !== keepId) suppressed.delete(id)
         },
       }
     }
@@ -484,6 +533,14 @@ html[data-windows-titlebar] .dsh-tab-pagebar{top:var(--dsh-windows-titlebar-heig
         if (row !== undefined && (row.retainedBy?.mainView ?? 0) > 0) return id
       }
       return undefined
+    }
+
+    function draftHasText(draft) {
+      return Boolean(draft?.draft?.trim()) || (draft?.occurrences?.length ?? 0) > 0
+    }
+
+    function draftIsSubmitting(draft) {
+      return draft?.phase === 'adjudicating' || draft?.phase === 'sending' || draft?.phase === 'submitting'
     }
 
     function sessionStatusSignal(status) {
@@ -773,6 +830,43 @@ html[data-windows-titlebar] .dsh-tab-pagebar{top:var(--dsh-windows-titlebar-heig
       )
     }
 
+    // ── 插件详情页设置 ──────────────────────────────────────────────────────
+    const SETTINGS_CSS = `
+.dsh-tab-settings{display:grid;justify-items:start;gap:12px;color:var(--dsw-alias-label-primary)}
+.dsh-tab-settings label{display:flex;align-items:center;gap:8px;cursor:pointer}
+.dsh-tab-settings input{accent-color:var(--dsw-alias-state-business-primary)}
+.dsh-tab-settings button{font:inherit;padding:4px 12px;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;
+  background:var(--dsw-alias-bg-layer-1);color:inherit;cursor:pointer}
+.dsh-tab-settings button:disabled{opacity:.55;cursor:default}
+`
+    function createTabSettings(store) {
+      return function TabSettings({ t }) {
+        const { settings } = useSyncExternalStore(store.subscribe, store.getSnapshot)
+        const [edited, setEdited] = useState(settings)
+        const dirty = edited.reopenAfterClose !== settings.reopenAfterClose || edited.closeDraftTabs !== settings.closeDraftTabs
+        return h(
+          'form',
+          {
+            className: 'dsh-tab-settings',
+            onSubmit: (event) => {
+              event.preventDefault()
+              store.setSettings(edited)
+            },
+          },
+          h('style', null, SETTINGS_CSS),
+          ['reopenAfterClose', 'closeDraftTabs'].map((key) => h('label', { key },
+            h('input', {
+              type: 'checkbox',
+              checked: edited[key],
+              onChange: (event) => setEdited({ ...edited, [key]: event.currentTarget.checked }),
+            }),
+            t(`settings.${key}`),
+          )),
+          h('button', { type: 'submit', disabled: !dirty }, t('settings.save')),
+        )
+      }
+    }
+
     // ── 标签栏 ──────────────────────────────────────────────────────────────
     function createTabBar(actions) {
       return function TabBar(props) {
@@ -791,13 +885,15 @@ html[data-windows-titlebar] .dsh-tab-pagebar{top:var(--dsh-windows-titlebar-heig
         // 面板清单与标题来自 sidebar.panellist 槽条目（由 apply 里同步进 panelStore）。
         const panels = useSyncExternalStore(actions.panelStore.subscribe, actions.panelStore.getSnapshot)
         const usePanelInfoHook = typeof usePanelInfo === 'function' ? usePanelInfo : useNoPanelInfo
-        const activePanelId = usePanelInfoHook((info) => info.activePanelId)
-        const activePanelKey = activePanelId === null || activePanelId === undefined ? null : panelTabKey(activePanelId)
-        const activeTabId = activePanelKey === null ? activeId : activePanelKey
+        const activePanelId = usePanelInfoHook((info) => info.activePanelId) ?? null
+        const emptyPanel = activePanelId === EMPTY_PANEL_ID
+        const activePanelKey = activePanelId === null || emptyPanel ? null : panelTabKey(activePanelId)
+        const visibleSessionId = activePanelId === null ? activeId : undefined
+        const activeTabId = activePanelKey ?? visibleSessionId
         const panelById = useMemo(() => new Map(panels.list.map((panel) => [panel.id, panel])), [panels.list])
         useLayoutEffect(() => {
           actions.setView({
-            activePanelId: activePanelId === undefined ? null : activePanelId,
+            activePanelId,
             panelList: panels.list,
             panelsReady: panels.ready,
           })
@@ -835,23 +931,11 @@ html[data-windows-titlebar] .dsh-tab-pagebar{top:var(--dsh-windows-titlebar-heig
           setPendingSelect(null)
         }, [])
 
-        // 当前会话自动入签（官方侧栏点开会话、启动恢复、新建会话都走这里）
-        useEffect(() => {
-          actions.store.pruneSuppressed(activeId)
-          if (activeId === undefined) return
-          if (actions.store.isSuppressed(activeId)) return
-          if (rows[activeId] === undefined) return
-          if (!actions.store.has(activeId)) actions.store.add(activeId)
-        }, [activeId, catalog])
-
-        // 会话被删除 / 归档后摘签
-        useEffect(() => {
-          if (catalog?.phase !== 'ready') return
-          const stale = actions.store.getSnapshot().ids.filter(
-            (id) => !isPanelTab(id) && (rows[id] === undefined || archived.has(id)),
-          )
-          if (stale.length > 0) actions.store.removeMany(stale)
-        }, [catalog, archived])
+        // 草稿是否入签由原生输入状态决定。空白面板期间清理抑制标记，允许侧栏重开同一会话。
+        useLayoutEffect(() => {
+          actions.store.pruneSuppressed(emptyPanel ? undefined : activeId)
+          return actions.observeSessionTabs(visibleSessionId, archived)
+        }, [actions, activeId, archived, catalog, emptyPanel, visibleSessionId, snapshot.settings.closeDraftTabs])
 
         const flatTabs = displayTabs(snapshot).filter((tab) => {
           if (isPanelTab(tab.id)) return panels.ready ? panelById.has(panelIdOf(tab.id)) : true
@@ -898,6 +982,20 @@ html[data-windows-titlebar] .dsh-tab-pagebar{top:var(--dsh-windows-titlebar-heig
         const visualActiveId = pendingSelect === null ? activeTabId : pendingSelect.id
         const stripRef = useRef(null)
         const barRef = useRef(null)
+
+        useEffect(() => {
+          const bar = barRef.current
+          const strip = stripRef.current
+          const onWheel = (event) => {
+            // 保留触控板的原生横向输入和浏览器的缩放手势。
+            if (event.ctrlKey || event.deltaX !== 0 || event.deltaY === 0 || strip.scrollWidth <= strip.clientWidth) return
+            const unit = event.deltaMode === 1 ? 18 : event.deltaMode === 2 ? strip.clientWidth : 1
+            event.preventDefault()
+            strip.scrollLeft += event.deltaY * unit
+          }
+          bar.addEventListener('wheel', onWheel, { passive: false })
+          return () => bar.removeEventListener('wheel', onWheel)
+        }, [])
 
         const requestSelect = useCallback(
           (id) => {
@@ -1048,8 +1146,10 @@ html[data-windows-titlebar] .dsh-tab-pagebar{top:var(--dsh-windows-titlebar-heig
           const revealActive = (smooth) => {
             const active = strip.querySelector('[aria-selected="true"]')
             if (active === null) return
-            const left = active.offsetLeft
-            const right = left + active.offsetWidth
+            // 工作区组是定位容器。用视口坐标换算，组内外标签都按同一滚动条计算。
+            const bounds = active.getBoundingClientRect()
+            const left = bounds.left - strip.getBoundingClientRect().left + strip.scrollLeft
+            const right = left + bounds.width
             let target = strip.scrollLeft
             if (left < strip.scrollLeft) target = Math.max(0, left - 8)
             else if (right > strip.scrollLeft + strip.clientWidth) target = right - strip.clientWidth + 8
@@ -1243,6 +1343,7 @@ html[data-windows-titlebar] .dsh-tab-pagebar{top:var(--dsh-windows-titlebar-heig
               'data-dsh-tab-bar': '',
               'data-tabs': String(tabs.length),
               'data-empty': tabs.length === 0 ? 'true' : 'false',
+              'data-main-empty': emptyPanel ? 'true' : undefined,
               'data-window-drag': '',
             },
             h('style', { key: 'style' }, CSS),
@@ -1450,32 +1551,81 @@ html[data-windows-titlebar] .dsh-tab-pagebar{top:var(--dsh-windows-titlebar-heig
           })
         }
 
-        // 关掉当前标签后 official 「新建会话」会复用空白会话，导航完成时当前会话可能不变，
-        // 这种情形下补一次「当前会话入签」，避免标签栏空着。
-        const ensureTimers = new Set()
-        ctx.effect(
-          () => () => {
-            for (const timer of ensureTimers) clearTimeout(timer)
-            ensureTimers.clear()
-          },
-          'dsh-tab: settle timers',
-        )
-        const scheduleEnsureCurrentTab = (closedCurrent) => {
-          for (const delay of [500, 1500]) {
-            const timer = setTimeout(() => {
-              ensureTimers.delete(timer)
-              try {
-                const current = currentSessionIdOf(sessions.list.getSnapshot())
-                if (current === undefined) return
-                // 导航还没完成时当前会话仍是刚被关掉的旧会话：不要把它加回来
-                if (current === closedCurrent) return
-                store.unsuppress(current)
-                if (!store.has(current)) store.add(current)
-              } catch (error) {
-                console.error('dsh-tab: settling current tab failed', error)
+        const inputStateFor = (id) => {
+          const binding = sessions.binding?.(id)
+          return binding === undefined ? undefined : ctx.get('conversation')?.input?.for(binding.ctx).state
+        }
+
+        /** 旧版本的后台空白标签没有草稿标记，通过 DSH 读取本地草稿，无需打开远端会话。 */
+        const readStoredDraft = (id) => {
+          const input = inputStateFor(id)
+          if (input !== undefined) return input.getSnapshot()
+          const resolver = ctx.get('conversation')?.input
+          if (resolver === undefined) return undefined
+          const reference = sessions.retain(id, { source: NS, connection: false })
+          try {
+            return resolver.for(reference.binding.ctx).state.getSnapshot()
+          } finally {
+            reference.release()
+          }
+        }
+
+        /** 订阅当前原生输入框。草稿内容由 DSH 持有，插件只记录相应的标签。 */
+        const observeSessionTabs = (visibleId, archived) => {
+          const { byId } = sessions.list.getSnapshot()
+          const input = visibleId !== undefined && byId[visibleId]?.blank === true ? inputStateFor(visibleId) : undefined
+          const pending = new Map()
+          const { ids, settings } = store.getSnapshot()
+          if (settings.closeDraftTabs) {
+            for (const id of ids) {
+              if (id === visibleId || byId[id]?.blank !== true) continue
+              const source = inputStateFor(id)
+              if (draftIsSubmitting(source?.getSnapshot())) pending.set(id, source)
+            }
+          }
+          const sync = () => {
+            const catalog = sessions.list.getSnapshot()
+            if (catalog?.phase !== 'ready') return
+            const { ids, settings } = store.getSnapshot()
+            const rows = catalog.byId
+            const stale = ids.filter((id) => {
+              if (isPanelTab(id)) return false
+              if (rows[id] === undefined || archived.has(id)) return true
+              if (rows[id].blank !== true) {
+                if (store.hasDraft(id)) store.add(id)
+                return false
               }
-            }, delay)
-            ensureTimers.add(timer)
+              if (id === visibleId) return false
+              // 首条消息还在提交时，目录仍将其标为 blank。等原生输入状态结算再决定是否摘签。
+              if (settings.closeDraftTabs) return !draftIsSubmitting(pending.get(id)?.getSnapshot())
+              if (store.hasDraft(id)) return false
+              const draft = readStoredDraft(id)
+              const hasText = draftHasText(draft)
+              if (!hasText && !(draft?.attachmentIds?.length > 0)) return true
+              store.add(id, hasText)
+              return false
+            })
+            store.removeMany(stale)
+            const visible = visibleId === undefined ? undefined : rows[visibleId]
+            if (visible === undefined || archived.has(visibleId)) return
+            const draft = visible.blank === true ? input?.getSnapshot() : undefined
+            if (store.isSuppressed(visibleId, draft)) return
+            if (visible.blank !== true) {
+              store.add(visibleId)
+              return
+            }
+            const hasText = draftHasText(draft)
+            if (hasText || (draft?.attachmentIds?.length ?? 0) > 0) {
+              store.add(visibleId, hasText)
+            } else if (draft !== undefined ? !draftIsSubmitting(draft) : !store.hasDraft(visibleId)) {
+              store.removeMany([visibleId])
+            }
+          }
+          const stops = [...pending.values()].map((source) => source.subscribe(sync))
+          if (input !== undefined) stops.push(input.subscribe(sync))
+          sync()
+          return () => {
+            for (const stop of stops) stop()
           }
         }
 
@@ -1502,57 +1652,49 @@ html[data-windows-titlebar] .dsh-tab-pagebar{top:var(--dsh-windows-titlebar-heig
           }
         }
 
-        /** 关掉一批标签；正在显示的标签在被关列表里时按 nextId / 首个剩余标签 / 新建会话的次序落位。 */
+        /** 关掉一批标签后优先切到邻签。没有剩余标签时按设置决定主区的去向。 */
         const closeIds = (idsToClose, nextId) => {
           if (idsToClose.length === 0) return
           const catalog = sessions.list.getSnapshot()
           const current = currentSessionIdOf(catalog)
           const currentRow = current === undefined ? undefined : catalog?.byId?.[current]
           const activePanelId = viewState.activePanelId
-          const activePanelKey = activePanelId === null || activePanelId === undefined ? null : panelTabKey(activePanelId)
+          const activePanelKey = activePanelId === null || activePanelId === EMPTY_PANEL_ID ? null : panelTabKey(activePanelId)
           const activeKey = activePanelKey ?? (current === undefined ? null : current)
-          const allTabs = displayTabs(store.getSnapshot())
-          const closingAll = allTabs.every((tab) => idsToClose.includes(tab.id))
-          // 全关且当前显示的是空白「新会话」：官方「新建会话」只会复用同一个空白会话，
-          // 所以保留它当新的新会话页，避免标签栏空着或导航竞态把旧标签加回来。
-          if (
-            closingAll &&
-            activePanelKey === null &&
-            current !== undefined &&
-            currentRow?.blank === true &&
-            idsToClose.includes(current)
-          ) {
-            const others = idsToClose.filter((id) => id !== current)
-            for (const id of others) if (!isPanelTab(id)) store.suppress(id)
-            store.removeMany(others)
+          for (const id of idsToClose) {
+            if (isPanelTab(id)) continue
+            const draft = id === current && currentRow?.blank === true ? inputStateFor(id)?.getSnapshot() : undefined
+            store.suppress(id, draft)
+          }
+          store.removeMany(idsToClose)
+          const remaining = tabsNow()
+          if (remaining.length === 0 && !store.getSnapshot().settings.reopenAfterClose) {
+            layout.selectPanel(EMPTY_PANEL_ID)
             return
           }
-          for (const id of idsToClose) if (!isPanelTab(id)) store.suppress(id)
-          store.removeMany(idsToClose)
           if (activeKey === null || !idsToClose.includes(activeKey)) return
           if (nextId !== undefined && store.has(nextId) && nextId !== activeKey) {
             activate(nextId)
             return
           }
-          const remaining = tabsNow()
           if (remaining.length > 0) {
             activate(remaining[0].id)
             return
           }
-          // 从面板标签一路关到空：收回面板、回到当前会话，并补回它的标签（不新建会话）。
+          // 从面板返回下方的会话。确认关掉的草稿标签仍然保持关闭。
           if (activePanelKey !== null && current !== undefined) {
+            if (currentRow?.blank !== true) store.unsuppress(current)
             layout.selectPanel(null)
-            store.unsuppress(current)
-            if (!store.has(current)) store.add(current)
             return
           }
-          uiWorkspace.startSession()
-          scheduleEnsureCurrentTab(current)
+          // 当前已是原生编辑器时，DSH 会复用同一个空白会话，直接保留编辑器即可。
+          if (currentRow?.blank !== true) uiWorkspace.startSession()
         }
 
         const actions = {
           store,
           panelStore,
+          observeSessionTabs,
           setView(next) {
             viewState.activePanelId = next.activePanelId
             viewState.panelList = next.panelList
@@ -1622,6 +1764,9 @@ html[data-windows-titlebar] .dsh-tab-pagebar{top:var(--dsh-windows-titlebar-heig
           },
           create() {
             try {
+              const catalog = sessions.list.getSnapshot()
+              const current = currentSessionIdOf(catalog)
+              if (current !== undefined && catalog.byId?.[current]?.blank === true) store.unsuppress(current)
               uiWorkspace.startSession()
             } catch (error) {
               console.error('dsh-tab: creating conversation failed', error)
@@ -1630,6 +1775,11 @@ html[data-windows-titlebar] .dsh-tab-pagebar{top:var(--dsh-windows-titlebar-heig
         }
 
         const TabBar = createTabBar(actions)
+        ctx.slots.inject('main', () => ctx.slots.register({ name: 'main', key: EMPTY_PANEL_ID },
+          () => h('div', { 'data-dsh-tab-empty-main': '' }),
+        ))
+        const TabSettings = createTabSettings(store)
+        ctx.slots.inject('plugins.bundle.config', () => ctx.slots.register({ name: 'plugins.bundle.config', key: NS, locale: NS }, TabSettings))
         ctx.slots.inject('shell.overlay', () =>
           ctx.slots.register(
             {

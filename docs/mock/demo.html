@@ -137,12 +137,17 @@ body[data-ds-dark-theme] .mock-bubble-user{background:#25314a;color:#dbe6ff}
   box-shadow:inset 0 -.5px 0 var(--dsw-alias-border-l2);
   -webkit-app-region:drag;
   --dsh-tab-max-width:180px}
+/* 抽屉悬浮在主列上方。标签栏只给原生侧栏按钮留空间。 */
+[data-sidebar-drawer] .dsh-tab-pagebar{left:var(--dsh-frame-leading-clearance, 0px)}
 html[data-windows-titlebar] .dsh-tab-pagebar{top:var(--dsh-windows-titlebar-height, 0px);
   border-top-left-radius:var(--dsh-windows-content-radius, 16px);corner-shape:round}
-[data-rightbar-fullscreen] .dsh-tab-pagebar{display:none}
+[data-rightbar-fullscreen] .dsh-tab-pagebar:not([data-main-empty=true]){display:none}
 .dsh-tab-pagebar__strip{display:flex;align-items:flex-end;flex:0 1 auto;min-width:0;
-  height:100%;overflow-x:auto;overflow-y:hidden;scrollbar-width:none;scroll-padding-inline:8px}
-.dsh-tab-pagebar__strip::-webkit-scrollbar{display:none}
+  height:100%;overflow-x:auto;overflow-y:hidden;scroll-padding-inline:8px;-webkit-app-region:no-drag}
+.dsh-tab-pagebar__strip::-webkit-scrollbar{height:6px}
+.dsh-tab-pagebar__strip::-webkit-scrollbar-thumb{border-radius:6px;background:var(--dsw-alias-label-dimmed)}
+.dsh-tab-pagebar__strip::-webkit-scrollbar-thumb:hover{background:var(--dsw-alias-label-tertiary)}
+@supports not selector(::-webkit-scrollbar){.dsh-tab-pagebar__strip{scrollbar-width:thin}}
 /* 短标签：书脊上的一张纸签 */
 .dsh-tab-pagebar__tab{position:relative;box-sizing:border-box;display:flex;align-items:center;gap:7px;
   flex:0 1 auto;min-width:72px;max-width:var(--dsh-tab-max-width);height:32px;padding:0 6px 0 12px;
@@ -152,10 +157,7 @@ html[data-windows-titlebar] .dsh-tab-pagebar{top:var(--dsh-windows-titlebar-heig
   animation:dsh-tab-enter .16s ease;
   transition:background-color .1s ease,color .1s ease,border-color .1s ease,box-shadow .1s ease}
 .dsh-tab-pagebar__tab:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-secondary)}
-/* 选中标签：抬到页面底色、不画底边线，和下面的会话页连成一张纸；
-   可用宽度是普通标签的 1.5 倍（180 → 270），标题短就按实际文字宽度收住、不留空白，
-   标题长才展开到 1.5 倍。切换时宽度和高度一起过渡
-   （只保留上方圆角，底部直角直接接页面，不再做额外的反圆角装饰） */
+/* 选中标签通过底色和上方圆角与会话区相连，宽高和位置不变。 */
 .dsh-tab-pagebar__tab[aria-selected=true]{z-index:1;background:var(--dsw-alias-bg-base);
   border-color:var(--dsw-alias-border-l2);border-radius:8px 8px 0 0;color:var(--dsw-alias-label-primary);
   box-shadow:0 2px 8px 0 rgba(15,20,40,.07)}
@@ -236,6 +238,7 @@ html[data-windows-titlebar] .dsh-tab-pagebar{top:var(--dsh-windows-titlebar-heig
   transition:background-color .12s ease,color .12s ease}
 .dsh-tab-pagebar__new:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
 .dsh-tab-pagebar__new:focus-visible{outline:1.5px solid var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-offset:1px}
+
 /* 右键菜单 */
 .dsh-tab-menu{position:fixed;z-index:100;box-sizing:border-box;min-width:188px;max-width:260px;padding:5px;
   border:.5px solid var(--dsw-alias-border-l2);border-radius:var(--dsw-radius-md);
