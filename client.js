@@ -710,6 +710,20 @@ html[data-windows-titlebar] .dsh-tab-pagebar:not([data-orientation=vertical]){to
       return [...pinnedTabs, ...rest]
     }
 
+    /** 只给支持中键关闭的控件绑定。按下时阻止自动滚动，松开时才执行关闭。 */
+    function middleCloseHandlers(close) {
+      return {
+        onMouseDown(event) {
+          if (event.button === 1) event.preventDefault()
+        },
+        onAuxClick(event) {
+          if (event.button !== 1) return
+          event.preventDefault()
+          close()
+        },
+      }
+    }
+
     // ── 单个标签页 ──────────────────────────────────────────────────────────
     function TabItem(props) {
       const {
@@ -733,10 +747,7 @@ html[data-windows-titlebar] .dsh-tab-pagebar:not([data-orientation=vertical]){to
           'data-drop': drop === null || drop === undefined ? undefined : drop,
           title: pinned ? `${title} · ${t('tab.pinned')}` : title,
           onClick: () => onSelect(id),
-          onMouseDown: (event) => {
-            // 浏览器在中键按下时启动自动滚动，会吞掉松开时的 auxclick。
-            if (event.button === 1) event.preventDefault()
-          },
+          ...middleCloseHandlers(() => onClose(id)),
           onPointerDown: (event) => {
             if (event.button !== 0) return
             const target = event.target
@@ -744,12 +755,6 @@ html[data-windows-titlebar] .dsh-tab-pagebar:not([data-orientation=vertical]){to
             onDragStart(event)
           },
           onContextMenu: (event) => onMenu(event, { tabId: id }),
-          onAuxClick: (event) => {
-            if (event.button === 1) {
-              event.preventDefault()
-              onClose(id)
-            }
-          },
           onKeyDown: (event) => {
             if (event.key === 'Enter' || event.key === ' ') {
               event.preventDefault()
@@ -1441,8 +1446,9 @@ html[data-windows-titlebar] .dsh-tab-pagebar:not([data-orientation=vertical]){to
                           ? t('tab.workspaceGroupExpand', { name: group.label })
                           : t('tab.workspaceGroupCollapse', { name: group.label }),
                         'aria-expanded': collapsed ? 'false' : 'true',
+                        ...middleCloseHandlers(() => actions.closeWorkspace(group.workspaceId)),
                         onPointerDown: (event) => event.stopPropagation(),
-                        onContextMenu: vertical ? (event) => openMenu(event, { workspaceId: group.workspaceId }) : undefined,
+                        onContextMenu: (event) => openMenu(event, { workspaceId: group.workspaceId }),
                         onClick: (event) => {
                           event.stopPropagation()
                           toggleCollapsedGroup(group.workspaceId)
