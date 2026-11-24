@@ -1704,8 +1704,11 @@ html[data-windows-titlebar] .dsh-tab-pagebar:not([data-orientation=vertical]){to
             const rows = catalog.byId
             const stale = ids.filter((id) => {
               if (isPanelTab(id)) return false
-              if (rows[id] === undefined || archived.has(id)) return true
-              if (rows[id].blank !== true) {
+              if (archived.has(id)) return true
+              const row = rows[id]
+              // 当前目录可能只包含部分会话，缺席时保留标签，等会话重新出现再显示。
+              if (row === undefined) return false
+              if (row.blank !== true) {
                 if (store.hasDraft(id)) store.add(id)
                 return false
               }
@@ -1856,8 +1859,7 @@ html[data-windows-titlebar] .dsh-tab-pagebar:not([data-orientation=vertical]){to
           },
           closeAll() {
             try {
-              const all = store.getSnapshot().ids
-              closeIds(all, undefined)
+              closeIds(tabsNow().map((tab) => tab.id), undefined)
             } catch (error) {
               console.error('dsh-tab: closing all tabs failed', error)
             }
