@@ -2,8 +2,8 @@
  * dsh-tab —— dsh Web GUI 的浏览器式会话标签页（浏览器半）。
  *
  * ## 层级
- * 标签栏是会话区的顶层：位于「会话列 + 右侧产物列」之上，下面才是会话头部、
- * 对话内容和右侧产物栏；切换标签页 = 切换整页会话（右侧产物栏跟随会话）。
+ * 顶部标签栏横跨会话列和右侧产物栏。左侧标签位于工作区树前，两处可同时显示。
+ * 切换标签页 = 切换整页会话（右侧产物栏跟随会话）。
  *
  * ## 外观
  * 书页标签：标签栏是一条比页面底色浅一号的「书脊」，选中的标签抬到页面底色、
@@ -16,9 +16,8 @@
  * 官方的「停止并归档」路径。
  *
  * ## 座位与机制（全部官方公开 API）
- * - 标签栏 = `shell.overlay` 座位（官方全局浮层）：标签栏绝对定位在会话区顶部，
- *   横跨「会话列 + 右侧产物列」；帧布局样式把三栏整体下移 44px 让出这一行，
- *   左栏（sidebar）保持整高不动。
+ * - 标签控制器 = `shell.overlay` 座位。顶部启用时由帧布局预留 44px；左侧通过
+ *   原生 `sidebar.workspaces` 座位标记定位插件容器，两个列表共用同一标签状态。
  * - 切换会话 = `ctx.uiWorkspace.openSession(id)`（官方侧栏行同一入口）；
  * - 新建对话 = `ctx.uiWorkspace.startSession()`（官方「新会话」入口，复用空白会话）；
  * - 归档会话 = `ctx.uiWorkspace.archiveSession(id, { stopActivity })`（官方归档入口）；
@@ -35,20 +34,23 @@ window.__ModuleLoader__.load({
   id: 'dsh-tab',
   factory(require) {
     const React = require('react')
+    const { createPortal } = require('react-dom')
+    const { SettingsForm, Switch, IconChevronDownOutlineRegular, IconChevronRightOutlineRegular } = require('@deepseek-ai/dsh-client-ui-primitives')
     const h = React.createElement
     const { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } = React
 
     const NS = 'dsh-tab'
-    // 标签宽度/高度过渡约 140ms；等它跑完再切会话，避免和官方整页重渲染抢主线程
-    const SELECT_COMMIT_DELAY = 0
     const STORAGE_KEY = 'dsh.tab.view.v2'
     const COLLAPSED_GROUPS_KEY = 'dsh.tab.groups.collapsed.v1'
+    const SIDEBAR_GROUPS_KEY = 'dsh.tab.sidebar.groups.collapsed.v1'
     const LEGACY_STORAGE_KEY = 'dsh.tab.openSessions.v1'
     const EMPTY_PANEL_ID = 'dsh-tab.empty'
 
     // ── 文案（官方 locale 命名空间；en 为必填回退） ──────────────────────────
     const ZH = {
       'tab.list': '会话标签页',
+      'tab.sidebar': '已打开',
+      'tab.sidebarList': '左侧已打开的标签页',
       'tab.new': '新建会话',
       'tab.newSession': '新会话',
       'tab.untitled': '未命名',
@@ -63,6 +65,7 @@ window.__ModuleLoader__.load({
       'tab.workspaceGroupExpand': '展开工作区标签组：{name}',
       'menu.close': '关闭标签页',
       'menu.closeRight': '关闭右侧标签页',
+      'menu.closeBelow': '关闭下方标签页',
       'menu.closeOthers': '关闭其他标签页',
       'menu.closeAll': '关闭全部标签页',
       'menu.pin': '固定标签页',
@@ -76,10 +79,14 @@ window.__ModuleLoader__.load({
       'menu.cancel': '取消',
       'settings.reopenAfterClose': '关闭最后一个标签后自动打开会话',
       'settings.closeDraftTabs': '离开新会话时自动关闭草稿标签',
+      'settings.showHorizontal': '显示顶部标签栏',
+      'settings.showVertical': '显示左侧标签栏',
       'settings.save': '保存',
     }
     const EN = {
       'tab.list': 'Conversation tabs',
+      'tab.sidebar': 'Open tabs',
+      'tab.sidebarList': 'Open tabs in sidebar',
       'tab.new': 'New conversation',
       'tab.newSession': 'New session',
       'tab.untitled': 'Untitled',
@@ -94,6 +101,7 @@ window.__ModuleLoader__.load({
       'tab.workspaceGroupExpand': 'Expand workspace tab group: {name}',
       'menu.close': 'Close tab',
       'menu.closeRight': 'Close tabs to the right',
+      'menu.closeBelow': 'Close tabs below',
       'menu.closeOthers': 'Close other tabs',
       'menu.closeAll': 'Close all tabs',
       'menu.pin': 'Pin tab',
@@ -107,6 +115,8 @@ window.__ModuleLoader__.load({
       'menu.cancel': 'Cancel',
       'settings.reopenAfterClose': 'Open a session after closing the last tab',
       'settings.closeDraftTabs': 'Close draft tabs when leaving a new session',
+      'settings.showHorizontal': 'Show top tabs',
+      'settings.showVertical': 'Show sidebar tabs',
       'settings.save': 'Save',
     }
 
@@ -151,15 +161,18 @@ div:has(> [data-shell-bottom]):has(> [data-shell-overlay]) > [data-side] {
 [data-windows-titlebar] div:has(> [data-shell-bottom]) > :nth-child(2) {
   border-top-left-radius: 0 !important;
 }
+div[data-rightbar-fullscreen]:has(> [data-shell-overlay]):has([data-dsh-tab-empty-main]) {
+  grid-template-rows: 44px minmax(0, 1fr) auto !important;
+}
+`
+
+    const EMPTY_FRAME_CSS = `
 /* 空白主面板跨到右栏，原会话的右栏暂时隐藏，返回后沿用原布局。 */
 div:has(> [data-shell-bottom]):has(> [data-shell-overlay]) > :has([data-global-panel] [data-dsh-tab-empty-main]) {
   grid-column: 2 / -1 !important;
 }
 div:has(> [data-shell-overlay]):has([data-dsh-tab-empty-main]) > :is([data-rightbar-col],[data-side=rightbar]) {
   visibility: hidden;
-}
-div[data-rightbar-fullscreen]:has(> [data-shell-overlay]):has([data-dsh-tab-empty-main]) {
-  grid-template-rows: 44px minmax(0, 1fr) auto !important;
 }
 `
 
@@ -174,10 +187,10 @@ div[data-rightbar-fullscreen]:has(> [data-shell-overlay]):has([data-dsh-tab-empt
   -webkit-app-region:drag;
   --dsh-tab-max-width:180px}
 /* 抽屉悬浮在主列上方。标签栏只给原生侧栏按钮留空间。 */
-[data-sidebar-drawer] .dsh-tab-pagebar{left:var(--dsh-frame-leading-clearance, 0px)}
-html[data-windows-titlebar] .dsh-tab-pagebar{top:var(--dsh-windows-titlebar-height, 0px);
+[data-sidebar-drawer] .dsh-tab-pagebar:not([data-orientation=vertical]){left:var(--dsh-frame-leading-clearance, 0px)}
+html[data-windows-titlebar] .dsh-tab-pagebar:not([data-orientation=vertical]){top:var(--dsh-windows-titlebar-height, 0px);
   border-top-left-radius:var(--dsh-windows-content-radius, 16px);corner-shape:round}
-[data-rightbar-fullscreen] .dsh-tab-pagebar:not([data-main-empty=true]){display:none}
+[data-rightbar-fullscreen] .dsh-tab-pagebar:not([data-orientation=vertical]):not([data-main-empty=true]){display:none}
 .dsh-tab-pagebar__strip{display:flex;align-items:flex-end;flex:0 1 auto;min-width:0;
   height:100%;overflow-x:auto;overflow-y:hidden;scroll-padding-inline:8px;-webkit-app-region:no-drag}
 .dsh-tab-pagebar__strip::-webkit-scrollbar{height:6px}
@@ -298,6 +311,42 @@ html[data-windows-titlebar] .dsh-tab-pagebar{top:var(--dsh-windows-titlebar-heig
 }
 `
 
+    const SIDEBAR_CSS = `
+[data-dsh-tab-sidebar-mount]{flex:none;min-width:0}
+[data-sidebar-collapsed] [data-dsh-tab-sidebar-mount]{display:none}
+.dsh-tab-pagebar[data-orientation=vertical]{position:relative;inset:auto;z-index:auto;display:block;height:auto;
+  padding:0 0 4px;background:transparent;box-shadow:none;-webkit-app-region:no-drag}
+.dsh-tab-pagebar__heading{display:flex;align-items:center;gap:4px;width:100%;min-height:24px;padding:0 4px;
+  background:transparent;border:0;color:var(--dsw-alias-label-secondary);font:inherit;font-size:11px;
+  cursor:pointer;text-align:start}
+.dsh-tab-pagebar__heading:hover{color:var(--dsw-alias-label-primary)}
+.dsh-tab-pagebar[data-orientation=vertical] .dsh-tab-pagebar__strip{display:block;height:auto;
+  max-height:min(34vh,320px);max-height:min(34cqh,320px);overflow-x:hidden;overflow-y:auto}
+.dsh-tab-pagebar[data-orientation=vertical] .dsh-tab-pagebar__strip::-webkit-scrollbar{width:6px}
+.dsh-tab-pagebar[data-orientation=vertical] .dsh-tab-pagebar__strip[hidden]{display:none}
+.dsh-tab-pagebar[data-orientation=vertical] .dsh-tab-pagebar__tab{width:100%;min-width:0;max-width:none;height:auto;
+  min-height:26px;gap:5px;padding:1px 4px 1px 7px;border:.5px solid transparent;border-radius:6px;
+  justify-content:flex-start;font-size:12px;line-height:17px}
+.dsh-tab-pagebar[data-orientation=vertical] .dsh-tab-pagebar__tab[aria-selected=true]{
+  border-color:var(--dsw-alias-border-l2);box-shadow:none}
+.dsh-tab-pagebar[data-orientation=vertical] .dsh-tab-pagebar__label{display:block;flex:1}
+.dsh-tab-pagebar[data-orientation=vertical] .dsh-tab-pagebar__badge{position:static;order:1;flex:0 1 auto;min-width:0;
+  max-width:60%;height:auto;padding:1px 3px;font-size:9px;line-height:11px;white-space:normal;overflow-wrap:anywhere}
+.dsh-tab-pagebar[data-orientation=vertical] .dsh-tab-pagebar__dot{order:2}
+.dsh-tab-pagebar[data-orientation=vertical] .dsh-tab-pagebar__close{order:3;width:16px;height:16px}
+.dsh-tab-pagebar[data-orientation=vertical] .dsh-tab-pagebar__divider{display:block;width:auto;height:1px;margin:3px 4px}
+.dsh-tab-pagebar[data-orientation=vertical] .dsh-tab-pagebar__group{display:block;height:auto;padding:0 0 0 4px;
+  margin:2px 0;border-radius:0}
+.dsh-tab-pagebar[data-orientation=vertical] .dsh-tab-pagebar__group::after{inset:0 auto 0 1px;width:2px;height:auto}
+.dsh-tab-pagebar[data-orientation=vertical] .dsh-tab-pagebar__group-chip{height:auto;min-height:19px;max-width:100%;
+  margin:0 0 1px;padding:1px 6px;line-height:14px;border-radius:6px}
+.dsh-tab-pagebar[data-orientation=vertical] .dsh-tab-pagebar__group-name{white-space:normal;overflow-wrap:anywhere}
+.dsh-tab-pagebar[data-orientation=vertical] .dsh-tab-pagebar__tab[data-group-workspace]::before{display:none}
+.dsh-tab-pagebar[data-orientation=vertical] .dsh-tab-pagebar__tab[data-drop=before]{box-shadow:inset 0 2px var(--dsw-alias-state-business-primary)}
+.dsh-tab-pagebar[data-orientation=vertical] .dsh-tab-pagebar__tab[data-drop=after]{box-shadow:inset 0 -2px var(--dsw-alias-state-business-primary)}
+@media (hover:none){.dsh-tab-pagebar[data-orientation=vertical] .dsh-tab-pagebar__close{opacity:1;pointer-events:auto}}
+`
+
     // ── 图标（16px 线性图标，currentColor 跟随主题） ─────────────────────────
     function svg(children) {
       return h(
@@ -389,6 +438,8 @@ html[data-windows-titlebar] .dsh-tab-pagebar{top:var(--dsh-windows-titlebar-heig
 
     function tabSettingsOf(value) {
       return Object.freeze({
+        showHorizontal: value?.showHorizontal !== false,
+        showVertical: value?.showVertical === true,
         reopenAfterClose: value?.reopenAfterClose !== false,
         closeDraftTabs: value?.closeDraftTabs === true,
       })
@@ -462,7 +513,7 @@ html[data-windows-titlebar] .dsh-tab-pagebar{top:var(--dsh-windows-titlebar-heig
         },
         setSettings(value) {
           const next = tabSettingsOf(value)
-          if (settings.reopenAfterClose === next.reopenAfterClose && settings.closeDraftTabs === next.closeDraftTabs) return
+          if (Object.keys(next).every((key) => settings[key] === next[key])) return
           settings = next
           publish()
         },
@@ -583,9 +634,9 @@ html[data-windows-titlebar] .dsh-tab-pagebar{top:var(--dsh-windows-titlebar-heig
     }
 
     /** 读取 / 保存被折叠的工作区标签组。 */
-    function readCollapsedGroups() {
+    function readCollapsedGroups(key) {
       try {
-        const raw = localStorage.getItem(COLLAPSED_GROUPS_KEY)
+        const raw = localStorage.getItem(key)
         if (raw === null) return new Set()
         const value = JSON.parse(raw)
         if (!Array.isArray(value)) return new Set()
@@ -594,9 +645,9 @@ html[data-windows-titlebar] .dsh-tab-pagebar{top:var(--dsh-windows-titlebar-heig
         return new Set()
       }
     }
-    function writeCollapsedGroups(collapsed) {
+    function writeCollapsedGroups(key, collapsed) {
       try {
-        localStorage.setItem(COLLAPSED_GROUPS_KEY, JSON.stringify([...collapsed]))
+        localStorage.setItem(key, JSON.stringify([...collapsed]))
       } catch (error) {
         /* 视图态，存储不可用时忽略 */
       }
@@ -659,7 +710,10 @@ html[data-windows-titlebar] .dsh-tab-pagebar{top:var(--dsh-windows-titlebar-heig
 
     // ── 单个标签页 ──────────────────────────────────────────────────────────
     function TabItem(props) {
-      const { id, title, active, signal, blank, pinned, panel, grouped, badge, drop, dragging, t, onSelect, onClose, onMenu, onArrow, onDragStart } = props
+      const {
+        id, title, active, tabIndex, vertical, signal, blank, pinned, panel, grouped, badge,
+        drop, dragging, t, onSelect, onClose, onMenu, onArrow, onDragStart,
+      } = props
       const statusLabel =
         signal === 'running' ? t('tab.running') : signal === 'pending' ? t('tab.pending') : signal === 'unread' ? t('tab.unread') : undefined
       return h(
@@ -667,7 +721,7 @@ html[data-windows-titlebar] .dsh-tab-pagebar{top:var(--dsh-windows-titlebar-heig
         {
           className: 'dsh-tab-pagebar__tab',
           role: 'tab',
-          tabIndex: active ? 0 : -1,
+          tabIndex,
           'aria-selected': active,
           'data-session-id': id,
           'data-pinned': pinned ? 'true' : 'false',
@@ -696,12 +750,12 @@ html[data-windows-titlebar] .dsh-tab-pagebar{top:var(--dsh-windows-titlebar-heig
               onSelect(id)
               return
             }
-            if (event.key === 'ArrowRight') {
+            if (event.key === (vertical ? 'ArrowDown' : 'ArrowRight')) {
               event.preventDefault()
               onArrow(id, 1)
               return
             }
-            if (event.key === 'ArrowLeft') {
+            if (event.key === (vertical ? 'ArrowUp' : 'ArrowLeft')) {
               event.preventDefault()
               onArrow(id, -1)
             }
@@ -715,8 +769,8 @@ html[data-windows-titlebar] .dsh-tab-pagebar{top:var(--dsh-windows-titlebar-heig
                 key: 'badge',
                 className: 'dsh-tab-pagebar__badge',
                 style: { backgroundColor: `hsl(${badge.hue} 46% 38%)` },
-                title: t('tab.workspace', { name: badge.label }),
-                'aria-hidden': 'true',
+                title: vertical ? undefined : t('tab.workspace', { name: badge.label }),
+                'aria-hidden': vertical ? undefined : 'true',
               },
               badge.label,
             ),
@@ -761,7 +815,7 @@ html[data-windows-titlebar] .dsh-tab-pagebar{top:var(--dsh-windows-titlebar-heig
 
     // ── 右键菜单 ────────────────────────────────────────────────────────────
     function TabMenu(props) {
-      const { x, y, hint, items, onClose } = props
+      const { x, y, hint, items, trigger, onClose } = props
       const menuRef = useRef(null)
       const [position, setPosition] = useState({ x, y })
 
@@ -773,6 +827,8 @@ html[data-windows-titlebar] .dsh-tab-pagebar{top:var(--dsh-windows-titlebar-heig
         const nextX = Math.max(8, Math.min(x, window.innerWidth - rect.width - 8))
         const nextY = Math.max(8, Math.min(y, window.innerHeight - rect.height - 8))
         if (nextX !== position.x || nextY !== position.y) setPosition({ x: nextX, y: nextY })
+        // 菜单挂在 body，先交出焦点，避免移动端原生抽屉的焦点循环把菜单隔开。
+        if (!element.contains(document.activeElement)) element.querySelector('button:not(:disabled)')?.focus({ preventScroll: true })
       }, [x, y, hint, items.length])
 
       useEffect(() => {
@@ -785,6 +841,7 @@ html[data-windows-titlebar] .dsh-tab-pagebar{top:var(--dsh-windows-titlebar-heig
             event.preventDefault()
             event.stopPropagation()
             onClose()
+            if (trigger?.isConnected) trigger.focus({ preventScroll: true })
           }
         }
         const onDismiss = () => onClose()
@@ -798,7 +855,7 @@ html[data-windows-titlebar] .dsh-tab-pagebar{top:var(--dsh-windows-titlebar-heig
           window.removeEventListener('scroll', onDismiss, true)
           window.removeEventListener('resize', onDismiss)
         }
-      }, [onClose])
+      }, [onClose, trigger])
 
       return h(
         'div',
@@ -831,131 +888,101 @@ html[data-windows-titlebar] .dsh-tab-pagebar{top:var(--dsh-windows-titlebar-heig
     }
 
     // ── 插件详情页设置 ──────────────────────────────────────────────────────
-    const SETTINGS_CSS = `
-.dsh-tab-settings{display:grid;justify-items:start;gap:12px;color:var(--dsw-alias-label-primary)}
-.dsh-tab-settings label{display:flex;align-items:center;gap:8px;cursor:pointer}
-.dsh-tab-settings input{accent-color:var(--dsw-alias-state-business-primary)}
-.dsh-tab-settings button{font:inherit;padding:4px 12px;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;
-  background:var(--dsw-alias-bg-layer-1);color:inherit;cursor:pointer}
-.dsh-tab-settings button:disabled{opacity:.55;cursor:default}
-`
     function createTabSettings(store) {
       return function TabSettings({ t }) {
         const { settings } = useSyncExternalStore(store.subscribe, store.getSnapshot)
         const [edited, setEdited] = useState(settings)
-        const dirty = edited.reopenAfterClose !== settings.reopenAfterClose || edited.closeDraftTabs !== settings.closeDraftTabs
+        const keys = Object.keys(settings)
         return h(
-          'form',
+          SettingsForm,
           {
-            className: 'dsh-tab-settings',
-            onSubmit: (event) => {
-              event.preventDefault()
-              store.setSettings(edited)
-            },
+            labels: { save: t('settings.save') },
+            state: { available: true, writable: true, dirty: keys.some((key) => edited[key] !== settings[key]) },
+            onSave: () => store.setSettings(edited),
+            onDiscard: () => {},
           },
-          h('style', null, SETTINGS_CSS),
-          ['reopenAfterClose', 'closeDraftTabs'].map((key) => h('label', { key },
-            h('input', {
-              type: 'checkbox',
-              checked: edited[key],
-              onChange: (event) => setEdited({ ...edited, [key]: event.currentTarget.checked }),
-            }),
-            t(`settings.${key}`),
-          )),
-          h('button', { type: 'submit', disabled: !dirty }, t('settings.save')),
+          keys.map((key) => {
+            const label = t(`settings.${key}`)
+            return h(
+              'label',
+              { key, style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 } },
+              label,
+              h(Switch, {
+                label,
+                checked: edited[key],
+                onChange: (checked) => setEdited((previous) => ({ ...previous, [key]: checked })),
+              }),
+            )
+          }),
         )
       }
     }
 
+    /** 在原生工作区座位前插入插件自己的容器。侧栏内容更新后重新定位，保留原生树。 */
+    function useSidebarMount(enabled, rootRef) {
+      const [mount, setMount] = useState(null)
+      useLayoutEffect(() => {
+        if (!enabled) return
+        const frame = rootRef.current.closest('[data-shell-overlay]')?.parentElement
+        if (!frame) return
+        const target = document.createElement('div')
+        target.setAttribute('data-dsh-tab-sidebar-mount', '')
+        let sidebar
+        const sync = () => {
+          const column = frame.querySelector(':scope > :nth-child(1 of :not([data-sidebar-mask]))')
+          if (column !== sidebar) {
+            sidebar = column
+            observer.disconnect()
+            observer.observe(frame, { childList: true, attributes: true, attributeFilter: ['data-sidebar-collapsed'] })
+            if (sidebar) observer.observe(sidebar, { childList: true, subtree: true })
+          }
+          const workspace = sidebar?.querySelector('[data-slot="sidebar.workspaces"]')
+          if (workspace) {
+            if (target.nextElementSibling !== workspace) workspace.before(target)
+            setMount(target)
+          } else {
+            target.remove()
+            // 只有展开的侧栏缺少工作区座位时才回退到顶部。原生折叠不改变布局偏好。
+            setMount(frame.hasAttribute('data-sidebar-collapsed') ? null : 'horizontal')
+          }
+        }
+        const observer = new MutationObserver(sync)
+        sync()
+        return () => {
+          observer.disconnect()
+          target.remove()
+          setMount(null)
+        }
+      }, [enabled, rootRef])
+      return mount
+    }
+
     // ── 标签栏 ──────────────────────────────────────────────────────────────
-    function createTabBar(actions) {
-      return function TabBar(props) {
-        const { useSessions, useSessionStatus, useWorkspaces, usePanelInfo, t } = props
-        const catalog = useSessions((state) => state)
-        const statuses = useSessionStatus((state) => state)
-        const workspaces = useWorkspaces((state) => state)
-        const snapshot = useSyncExternalStore(actions.store.subscribe, actions.store.getSnapshot)
+    function createTabBars(actions) {
+      function TabBar(props) {
+        const {
+          orientation, rows, statuses, panelById, workspaceBadges, workspaceGroupItems, orderedTabs,
+          visualActiveId, emptyPanel, requestSelect, t,
+        } = props
+        const vertical = orientation === 'vertical'
+        const groupStorageKey = vertical ? SIDEBAR_GROUPS_KEY : COLLAPSED_GROUPS_KEY
         const [menu, setMenu] = useState(null)
-
-        const rows = catalog?.byId ?? {}
-        const archived = useMemo(() => new Set(workspaces?.archivedSessionIds ?? []), [workspaces])
-        const activeId = currentSessionIdOf(catalog)
-
-        // 全局面板（插件 / 自动化任务 …）：选中项来自官方 layout.panelInfo，
-        // 面板清单与标题来自 sidebar.panellist 槽条目（由 apply 里同步进 panelStore）。
-        const panels = useSyncExternalStore(actions.panelStore.subscribe, actions.panelStore.getSnapshot)
-        const usePanelInfoHook = typeof usePanelInfo === 'function' ? usePanelInfo : useNoPanelInfo
-        const activePanelId = usePanelInfoHook((info) => info.activePanelId) ?? null
-        const emptyPanel = activePanelId === EMPTY_PANEL_ID
-        const activePanelKey = activePanelId === null || emptyPanel ? null : panelTabKey(activePanelId)
-        const visibleSessionId = activePanelId === null ? activeId : undefined
-        const activeTabId = activePanelKey ?? visibleSessionId
-        const panelById = useMemo(() => new Map(panels.list.map((panel) => [panel.id, panel])), [panels.list])
-        useLayoutEffect(() => {
-          actions.setView({
-            activePanelId,
-            panelList: panels.list,
-            panelsReady: panels.ready,
-          })
-        }, [activePanelId, panels])
-
-        // 会话 → 所属工作区（角标用）。工作区标题为空时用目录名，再退到 workspaceId。
-        const workspaceBadges = useMemo(() => {
-          const map = new Map()
-          for (const item of workspaces?.items ?? []) {
-            const title = typeof item.title === 'string' && item.title.trim().length > 0 ? item.title.trim() : ''
-            const label = title || basenameOf(item.path) || (item.workspaceId === undefined ? '' : String(item.workspaceId))
-            if (label.length === 0) continue
-            const hue = workspaceHue(item.workspaceId === undefined ? label : String(item.workspaceId))
-            for (const sessionId of item.sessionIds ?? []) {
-              if (!map.has(sessionId)) map.set(sessionId, { workspaceId: item.workspaceId, label, hue })
-            }
-          }
-          return map
-        }, [workspaces])
-
-        // 点标签时先把视觉上的「激活」切过去跑动画，等动画结束再真正切会话。
-        // 官方切会话会同步重渲染整个会话页（实测一次约 60–75ms 长任务），
-        // 和标签动画同时发生会直接把动画顶卡；拆开之后两段各自流畅。
-        const [pendingSelect, setPendingSelect] = useState(null)
-        const pendingRef = useRef(null)
-        const pendingTimerRef = useRef(null)
-        useEffect(() => {
-          pendingRef.current = pendingSelect
-        }, [pendingSelect])
-        const clearPendingSelect = useCallback(() => {
-          if (pendingTimerRef.current !== null) {
-            clearTimeout(pendingTimerRef.current)
-            pendingTimerRef.current = null
-          }
-          setPendingSelect(null)
-        }, [])
-
-        // 草稿是否入签由原生输入状态决定。空白面板期间清理抑制标记，允许侧栏重开同一会话。
-        useLayoutEffect(() => {
-          actions.store.pruneSuppressed(emptyPanel ? undefined : activeId)
-          return actions.observeSessionTabs(visibleSessionId, archived)
-        }, [actions, activeId, archived, catalog, emptyPanel, visibleSessionId, snapshot.settings.closeDraftTabs])
-
-        const flatTabs = displayTabs(snapshot).filter((tab) => {
-          if (isPanelTab(tab.id)) return panels.ready ? panelById.has(panelIdOf(tab.id)) : true
-          return rows[tab.id] !== undefined && !archived.has(tab.id)
-        })
-        const [collapsedGroups, setCollapsedGroups] = useState(readCollapsedGroups)
+        const [sidebarOpen, setSidebarOpen] = useState(true)
+        const [collapsedGroups, setCollapsedGroups] = useState(() => readCollapsedGroups(groupStorageKey))
         const toggleCollapsedGroup = useCallback((workspaceId) => {
           setCollapsedGroups((previous) => {
             const next = new Set(previous)
             if (next.has(workspaceId)) next.delete(workspaceId)
             else next.add(workspaceId)
-            writeCollapsedGroups(next)
+            writeCollapsedGroups(groupStorageKey, next)
             return next
           })
-        }, [])
-        const workspaceGroupItems = groupTabsByWorkspace(flatTabs, workspaceBadges)
+        }, [groupStorageKey])
         const tabs = workspaceGroupItems.flatMap((item) => {
           if (item.kind === 'tab') return [item.tab]
           return collapsedGroups.has(item.group.workspaceId) ? [] : item.group.tabs
         })
+        const focusId = tabs.some((tab) => tab.id === visualActiveId) ? visualActiveId : tabs[0]?.id
         const pinnedCount = tabs.filter((tab) => tab.pinned).length
         const bucketById = new Map()
         for (const item of workspaceGroupItems) {
@@ -967,65 +994,31 @@ html[data-windows-titlebar] .dsh-tab-pagebar{top:var(--dsh-windows-titlebar-heig
           for (const tab of item.group.tabs) bucketById.set(tab.id, bucket)
         }
 
-        // 打开全局面板时给它一个独立标签（已有则复用）；面板注销后摘掉对应标签。
-        useLayoutEffect(() => {
-          if (activePanelKey === null) return
-          if (!actions.store.has(activePanelKey)) actions.store.add(activePanelKey)
-        }, [activePanelKey])
-        useEffect(() => {
-          if (!panels.ready) return
-          const keys = new Set(panels.list.map((panel) => panelTabKey(panel.id)))
-          const stale = actions.store.getSnapshot().ids.filter((id) => isPanelTab(id) && !keys.has(id))
-          if (stale.length > 0) actions.store.removeMany(stale)
-        }, [panels])
-
-        const visualActiveId = pendingSelect === null ? activeTabId : pendingSelect.id
         const stripRef = useRef(null)
         const barRef = useRef(null)
 
         useEffect(() => {
           const bar = barRef.current
           const strip = stripRef.current
+          const axis = vertical ? 'scrollTop' : 'scrollLeft'
           const onWheel = (event) => {
-            // 保留触控板的原生横向输入和浏览器的缩放手势。
-            if (event.ctrlKey || event.deltaX !== 0 || event.deltaY === 0 || strip.scrollWidth <= strip.clientWidth) return
-            const unit = event.deltaMode === 1 ? 18 : event.deltaMode === 2 ? strip.clientWidth : 1
-            event.preventDefault()
-            strip.scrollLeft += event.deltaY * unit
+            if (!event.cancelable || event.defaultPrevented || event.ctrlKey || event.deltaY === 0) return
+            if (vertical) {
+              if (!strip.contains(event.target) || Math.abs(event.deltaX) > Math.abs(event.deltaY)) return
+            } else if (event.deltaX !== 0) {
+              return // 保留触控板的原生横向输入。
+            }
+            const visibleSize = vertical ? strip.clientHeight : strip.clientWidth
+            if ((vertical ? strip.scrollHeight : strip.scrollWidth) <= visibleSize) return
+            const unit = event.deltaMode === 1 ? 18 : event.deltaMode === 2 ? visibleSize : 1
+            const previous = strip[axis]
+            strip[axis] += event.deltaY * unit
+            // 原生侧栏也处理滚轮。左侧标签滚到边缘后，交还给工作区树。
+            if (!vertical || strip[axis] !== previous) event.preventDefault()
           }
           bar.addEventListener('wheel', onWheel, { passive: false })
           return () => bar.removeEventListener('wheel', onWheel)
-        }, [])
-
-        const requestSelect = useCallback(
-          (id) => {
-            if (id === visualActiveId) return
-            const reduceMotion =
-              typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches
-            if (reduceMotion) {
-              clearPendingSelect()
-              actions.activate(id)
-              return
-            }
-            if (pendingTimerRef.current !== null) {
-              clearTimeout(pendingTimerRef.current)
-              pendingTimerRef.current = null
-            }
-            setPendingSelect({ id, fromId: activeTabId })
-            pendingTimerRef.current = setTimeout(() => {
-              pendingTimerRef.current = null
-              const pending = pendingRef.current
-              if (pending === null || pending.id !== id) return
-              if (!actions.store.has(id)) {
-                setPendingSelect(null)
-                return
-              }
-              actions.activate(id)
-              setPendingSelect(null)
-            }, SELECT_COMMIT_DELAY)
-          },
-          [activeTabId, visualActiveId, actions, clearPendingSelect],
-        )
+        }, [vertical])
 
         // ── 拖拽排序 ────────────────────────────────────────────────────────
         const [dragState, setDragState] = useState(null)
@@ -1047,20 +1040,23 @@ html[data-windows-titlebar] .dsh-tab-pagebar{top:var(--dsh-windows-titlebar-heig
         )
         const beginDrag = (event, id, pinned) => {
           if (event.button !== 0 || dragCleanupRef.current !== null) return
+          // 前一次拖拽只屏蔽松手生成的 click。新的按下意味着一次独立点击。
+          selectGuardRef.current = 0
           const strip = stripRef.current
           if (strip === null) return
           const dragBucket = bucketById.get(id) ?? 'plain'
+          const positionOf = (pointer) => vertical ? pointer.clientY : pointer.clientX
           const candidates = tabs
             .filter((tab) => tab.pinned === pinned && (bucketById.get(tab.id) ?? 'plain') === dragBucket)
             .map((tab) => {
               const element = strip.querySelector(`[data-session-id="${tab.id}"]`)
               if (element === null) return null
               const rect = element.getBoundingClientRect()
-              return { id: tab.id, mid: rect.left + rect.width / 2 }
+              return { id: tab.id, mid: vertical ? rect.top + rect.height / 2 : rect.left + rect.width / 2 }
             })
             .filter((candidate) => candidate !== null)
           if (candidates.length < 2) return
-          dragRef.current = { id, pinned, startX: event.clientX, moved: false, candidates, drop: null }
+          dragRef.current = { id, pinned, start: positionOf(event), moved: false, candidates, drop: null }
           const stop = () => {
             if (dragCleanupRef.current !== stop) return
             window.removeEventListener('pointermove', onMove)
@@ -1084,15 +1080,16 @@ html[data-windows-titlebar] .dsh-tab-pagebar{top:var(--dsh-windows-titlebar-heig
           const onMove = (moveEvent) => {
             const drag = dragRef.current
             if (drag === null) return
+            const position = positionOf(moveEvent)
             if (!drag.moved) {
-              if (Math.abs(moveEvent.clientX - drag.startX) < 5) return
+              if (Math.abs(position - drag.start) < 5) return
               drag.moved = true
               selectGuardRef.current = performance.now() + 500
             }
             if (moveEvent.cancelable) moveEvent.preventDefault()
             const remaining = drag.candidates.filter((candidate) => candidate.id !== drag.id)
             if (remaining.length === 0) return
-            const insertIndex = remaining.findIndex((candidate) => moveEvent.clientX < candidate.mid)
+            const insertIndex = remaining.findIndex((candidate) => position < candidate.mid)
             const reference = insertIndex < 0 ? remaining[remaining.length - 1] : remaining[insertIndex]
             const place = insertIndex < 0 ? 'after' : 'before'
             const previous = drag.drop
@@ -1122,25 +1119,11 @@ html[data-windows-titlebar] .dsh-tab-pagebar{top:var(--dsh-windows-titlebar-heig
           document.addEventListener('keydown', onKeyDown, true)
         }
 
-        // 外部导航（侧栏点会话 / 面板 / 新建会话 / 关闭后自动落位）打断待切换
-        useEffect(() => {
-          if (pendingSelect === null) return
-          if (activeTabId === pendingSelect.id) return
-          if (activeTabId !== pendingSelect.fromId) clearPendingSelect()
-        }, [activeTabId, pendingSelect, clearPendingSelect])
-
-        useEffect(
-          () => () => {
-            if (pendingTimerRef.current !== null) clearTimeout(pendingTimerRef.current)
-          },
-          [],
-        )
-
         // 当前标签滚入可见范围（只滚标签条自身，不滚页面）；切换标签时平滑滚动，
         // 标签条因侧栏拖动变宽变窄时直接对齐。
         useEffect(() => {
           const strip = stripRef.current
-          if (strip === null) return undefined
+          if (strip === null || (vertical && !sidebarOpen)) return undefined
           const reduceMotion =
             typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches
           const revealActive = (smooth) => {
@@ -1148,25 +1131,31 @@ html[data-windows-titlebar] .dsh-tab-pagebar{top:var(--dsh-windows-titlebar-heig
             if (active === null) return
             // 工作区组是定位容器。用视口坐标换算，组内外标签都按同一滚动条计算。
             const bounds = active.getBoundingClientRect()
-            const left = bounds.left - strip.getBoundingClientRect().left + strip.scrollLeft
-            const right = left + bounds.width
-            let target = strip.scrollLeft
-            if (left < strip.scrollLeft) target = Math.max(0, left - 8)
-            else if (right > strip.scrollLeft + strip.clientWidth) target = right - strip.clientWidth + 8
-            if (Math.abs(target - strip.scrollLeft) < 1) return
-            if (!smooth || reduceMotion || typeof strip.scrollTo !== 'function') strip.scrollLeft = target
-            else strip.scrollTo({ left: target, behavior: 'smooth' })
+            const viewport = strip.getBoundingClientRect()
+            const visibleSize = vertical ? strip.clientHeight : strip.clientWidth
+            if (visibleSize === 0) return
+            const axis = vertical ? 'scrollTop' : 'scrollLeft'
+            const position = strip[axis]
+            const start = position + (vertical ? bounds.top - viewport.top : bounds.left - viewport.left)
+            const end = start + (vertical ? bounds.height : bounds.width)
+            let target = position
+            if (start < position) target = Math.max(0, start - 8)
+            else if (end > position + visibleSize) target = end - visibleSize + 8
+            if (Math.abs(target - position) < 1) return
+            if (!smooth || reduceMotion || typeof strip.scrollTo !== 'function') strip[axis] = target
+            else strip.scrollTo({ [vertical ? 'top' : 'left']: target, behavior: 'smooth' })
           }
           revealActive(true)
           if (typeof ResizeObserver !== 'function') return undefined
           const observer = new ResizeObserver(() => revealActive(false))
           observer.observe(strip)
           return () => observer.disconnect()
-        }, [visualActiveId, tabs.length])
+        }, [visualActiveId, tabs.length, vertical, sidebarOpen])
 
         // 标签栏在 shell.overlay 里绝对定位：左边缘跟住左栏宽度（左栏折叠时为 0，
         // 桌面端折叠侧栏时由 CSS 的 clearance 变量继续右移，避开窗口按钮）
         useEffect(() => {
+          if (vertical) return
           const bar = barRef.current
           const overlay = bar === null ? null : bar.closest('[data-shell-overlay]')
           const frame = overlay === null ? null : overlay.parentElement
@@ -1200,7 +1189,7 @@ html[data-windows-titlebar] .dsh-tab-pagebar{top:var(--dsh-windows-titlebar-heig
             for (const timer of retryTimers) clearTimeout(timer)
             if (observer !== undefined) observer.disconnect()
           }
-        }, [])
+        }, [vertical])
 
         // 菜单指向的标签被关掉 / 归档后自动收起
         useEffect(() => {
@@ -1212,7 +1201,8 @@ html[data-windows-titlebar] .dsh-tab-pagebar{top:var(--dsh-windows-titlebar-heig
         const openMenu = useCallback((event, tabId) => {
           event.preventDefault()
           event.stopPropagation()
-          setMenu({ x: event.clientX, y: event.clientY, tabId, step: 'list', error: undefined })
+          const trigger = event.currentTarget.closest('[role="tab"]')
+          setMenu({ x: event.clientX, y: event.clientY, tabId, trigger, step: 'list', error: undefined })
         }, [])
 
         const menuTabIndex = menu === null ? -1 : tabs.findIndex((tab) => tab.id === menu.tabId)
@@ -1281,15 +1271,15 @@ html[data-windows-titlebar] .dsh-tab-pagebar{top:var(--dsh-windows-titlebar-heig
               { key: 'cancel', label: t('menu.cancel'), run: dismissMenu },
             ]
           } else if (menuTab !== undefined) {
-            const rightCount = tabs.length - menuTabIndex - 1
-            const otherCount = tabs.filter((tab) => tab.id !== menuTab.id && !tab.pinned).length
+            const following = orderedTabs.slice(orderedTabs.findIndex((tab) => tab.id === menuTab.id) + 1)
+            const otherCount = orderedTabs.filter((tab) => tab.id !== menuTab.id && !tab.pinned).length
             menuItems = [
-              { key: 'close', label: t('menu.close'), run: runMenu(() => actions.closeOne(menuTab.id)) },
+              { key: 'close', label: t('menu.close'), run: runMenu(() => actions.closeOne(menuTab.id, orderedTabs)) },
               {
                 key: 'close-right',
-                label: t('menu.closeRight'),
-                disabled: rightCount === 0,
-                run: runMenu(() => actions.closeRight(menuTab.id)),
+                label: t(vertical ? 'menu.closeBelow' : 'menu.closeRight'),
+                disabled: following.length === 0,
+                run: runMenu(() => actions.closeFollowing(menuTab.id, following)),
               },
               {
                 key: 'close-others',
@@ -1318,9 +1308,7 @@ html[data-windows-titlebar] .dsh-tab-pagebar{top:var(--dsh-windows-titlebar-heig
                           (status?.pendingInteraction !== undefined && status?.pendingInteraction !== null)
                         if (busy)
                           setMenu({
-                            x: menu.x,
-                            y: menu.y,
-                            tabId: menuTab.id,
+                            ...menu,
                             step: 'archive-confirm',
                             error: undefined,
                           })
@@ -1341,12 +1329,23 @@ html[data-windows-titlebar] .dsh-tab-pagebar{top:var(--dsh-windows-titlebar-heig
               ref: barRef,
               className: 'dsh-tab-pagebar',
               'data-dsh-tab-bar': '',
+              'data-orientation': orientation,
               'data-tabs': String(tabs.length),
               'data-empty': tabs.length === 0 ? 'true' : 'false',
               'data-main-empty': emptyPanel ? 'true' : undefined,
-              'data-window-drag': '',
+              'data-window-drag': vertical ? undefined : '',
             },
-            h('style', { key: 'style' }, CSS),
+            vertical ? h(
+              'button',
+              {
+                type: 'button',
+                className: 'dsh-tab-pagebar__heading',
+                'aria-expanded': sidebarOpen,
+                onClick: () => setSidebarOpen((previous) => !previous),
+              },
+              h(sidebarOpen ? IconChevronDownOutlineRegular : IconChevronRightOutlineRegular, { size: 12, 'aria-hidden': true }),
+              t('tab.sidebar'),
+            ) : null,
             h(
               'div',
               {
@@ -1354,7 +1353,9 @@ html[data-windows-titlebar] .dsh-tab-pagebar{top:var(--dsh-windows-titlebar-heig
                 ref: stripRef,
                 className: 'dsh-tab-pagebar__strip',
                 role: 'tablist',
-                'aria-label': t('tab.list'),
+                'aria-label': t(vertical ? 'tab.sidebarList' : 'tab.list'),
+                'aria-orientation': orientation,
+                hidden: vertical && !sidebarOpen,
               },
               (() => {
                 const orderIndex = new Map(tabs.map((tab, index) => [tab.id, index]))
@@ -1372,6 +1373,8 @@ html[data-windows-titlebar] .dsh-tab-pagebar{top:var(--dsh-windows-titlebar-heig
                     key: tab.id,
                     id: tab.id,
                     active: tab.id === visualActiveId,
+                    tabIndex: tab.id === focusId ? 0 : -1,
+                    vertical,
                     blank: panelTab ? false : row?.blank === true,
                     pinned: tab.pinned,
                     panel: panelTab,
@@ -1387,7 +1390,7 @@ html[data-windows-titlebar] .dsh-tab-pagebar{top:var(--dsh-windows-titlebar-heig
                     signal: panelTab ? undefined : sessionStatusSignal(statuses?.get(tab.id)),
                     t,
                     onSelect: onTabSelect,
-                    onClose: actions.closeOne,
+                    onClose: (id) => actions.closeOne(id, orderedTabs),
                     onMenu: openMenu,
                     onArrow: focusRelative,
                     onDragStart: (event) => beginDrag(event, tab.id, tab.pinned),
@@ -1443,7 +1446,7 @@ html[data-windows-titlebar] .dsh-tab-pagebar{top:var(--dsh-windows-titlebar-heig
                 })
               })(),
             ),
-            h(
+            vertical ? null : h(
               'button',
               {
                 key: 'new',
@@ -1458,14 +1461,110 @@ html[data-windows-titlebar] .dsh-tab-pagebar{top:var(--dsh-windows-titlebar-heig
           ),
           menu === null
             ? null
-            : h(TabMenu, {
+            : createPortal(h(TabMenu, {
                 key: 'menu',
                 x: menu.x,
                 y: menu.y,
                 hint: menuHint,
                 items: menuItems,
+                trigger: menu.trigger,
                 onClose: dismissMenu,
-              }),
+              }), document.body),
+        )
+      }
+
+      return function TabBars(props) {
+        const { useSessions, useSessionStatus, useWorkspaces, usePanelInfo, t } = props
+        const catalog = useSessions((state) => state)
+        const statuses = useSessionStatus((state) => state)
+        const workspaces = useWorkspaces((state) => state)
+        const snapshot = useSyncExternalStore(actions.store.subscribe, actions.store.getSnapshot)
+
+        const rows = catalog?.byId ?? {}
+        const archived = useMemo(() => new Set(workspaces?.archivedSessionIds ?? []), [workspaces])
+        const activeId = currentSessionIdOf(catalog)
+
+        // 全局面板（插件 / 自动化任务 …）：选中项来自官方 layout.panelInfo，
+        // 面板清单与标题来自 sidebar.panellist 槽条目（由 apply 里同步进 panelStore）。
+        const panels = useSyncExternalStore(actions.panelStore.subscribe, actions.panelStore.getSnapshot)
+        const usePanelInfoHook = typeof usePanelInfo === 'function' ? usePanelInfo : useNoPanelInfo
+        const activePanelId = usePanelInfoHook((info) => info.activePanelId) ?? null
+        const emptyPanel = activePanelId === EMPTY_PANEL_ID
+        const activePanelKey = activePanelId === null || emptyPanel ? null : panelTabKey(activePanelId)
+        const visibleSessionId = activePanelId === null ? activeId : undefined
+        const activeTabId = activePanelKey ?? visibleSessionId
+        const panelById = useMemo(() => new Map(panels.list.map((panel) => [panel.id, panel])), [panels.list])
+        useLayoutEffect(() => {
+          actions.setView({
+            activePanelId,
+            panelList: panels.list,
+            panelsReady: panels.ready,
+          })
+        }, [activePanelId, panels])
+
+        // 会话 → 所属工作区（角标用）。工作区标题为空时用目录名，再退到 workspaceId。
+        const workspaceBadges = useMemo(() => {
+          const map = new Map()
+          for (const item of workspaces?.items ?? []) {
+            const title = typeof item.title === 'string' && item.title.trim().length > 0 ? item.title.trim() : ''
+            const label = title || basenameOf(item.path) || (item.workspaceId === undefined ? '' : String(item.workspaceId))
+            if (label.length === 0) continue
+            const hue = workspaceHue(item.workspaceId === undefined ? label : String(item.workspaceId))
+            for (const sessionId of item.sessionIds ?? []) {
+              if (!map.has(sessionId)) map.set(sessionId, { workspaceId: item.workspaceId, label, hue })
+            }
+          }
+          return map
+        }, [workspaces])
+
+        // 草稿是否入签由原生输入状态决定。空白面板期间清理抑制标记，允许侧栏重开同一会话。
+        useLayoutEffect(() => {
+          actions.store.pruneSuppressed(emptyPanel ? undefined : activeId)
+          return actions.observeSessionTabs(visibleSessionId, archived)
+        }, [actions, activeId, archived, catalog, emptyPanel, visibleSessionId, snapshot.settings.closeDraftTabs])
+
+        const flatTabs = displayTabs(snapshot).filter((tab) => {
+          if (isPanelTab(tab.id)) return panels.ready ? panelById.has(panelIdOf(tab.id)) : true
+          return rows[tab.id] !== undefined && !archived.has(tab.id)
+        })
+        const workspaceGroupItems = groupTabsByWorkspace(flatTabs, workspaceBadges)
+        const orderedTabs = workspaceGroupItems.flatMap((item) => item.kind === 'tab' ? [item.tab] : item.group.tabs)
+        // 打开全局面板时给它一个独立标签（已有则复用）；面板注销后摘掉对应标签。
+        useLayoutEffect(() => {
+          if (activePanelKey === null) return
+          if (!actions.store.has(activePanelKey)) actions.store.add(activePanelKey)
+        }, [activePanelKey])
+        useEffect(() => {
+          if (!panels.ready) return
+          const keys = new Set(panels.list.map((panel) => panelTabKey(panel.id)))
+          const stale = actions.store.getSnapshot().ids.filter((id) => isPanelTab(id) && !keys.has(id))
+          if (stale.length > 0) actions.store.removeMany(stale)
+        }, [panels])
+
+        const rootRef = useRef(null)
+        const { showHorizontal, showVertical } = snapshot.settings
+        const sidebarMount = useSidebarMount(showVertical, rootRef)
+        const showTop = showHorizontal || (showVertical && sidebarMount === 'horizontal')
+        const shared = {
+          rows, statuses, panelById, workspaceBadges, workspaceGroupItems, orderedTabs, emptyPanel, t,
+          visualActiveId: activeTabId,
+          requestSelect(id) {
+            if (id !== activeTabId) actions.activate(id)
+          },
+        }
+
+        return h(
+          React.Fragment,
+          null,
+          h('span', { ref: rootRef, hidden: true }),
+          h('style', { 'data-plugin': NS, 'data-plugin-css': 'dsh-tab/frame.css' },
+            (showTop ? FRAME_CSS : '') + EMPTY_FRAME_CSS,
+          ),
+          h('style', null, CSS + (showVertical ? SIDEBAR_CSS : '')),
+          showTop ? h(TabBar, { ...shared, orientation: 'horizontal' }) : null,
+          showVertical && sidebarMount !== null && sidebarMount !== 'horizontal'
+            ? createPortal(h(TabBar, { ...shared, orientation: 'vertical' }), sidebarMount)
+            : null,
         )
       }
     }
@@ -1475,16 +1574,6 @@ html[data-windows-titlebar] .dsh-tab-pagebar{top:var(--dsh-windows-titlebar-heig
       inject: ['slots', 'locale', 'sessions', 'uiWorkspace', 'workspaces', 'layout'],
       apply(ctx) {
         ctx.effect(() => ctx.locale.register(NS, { zh: ZH, en: EN }), 'dsh-tab: dictionaries')
-
-        // 帧布局样式：让 shell.bottom 这行排到三栏上方、横跨会话列 + 右栏列
-        ctx.effect(() => {
-          const style = document.createElement('style')
-          style.dataset.plugin = 'dsh-tab'
-          style.dataset.pluginCss = 'dsh-tab/frame.css'
-          style.textContent = FRAME_CSS
-          document.head.appendChild(style)
-          return () => style.remove()
-        }, 'dsh-tab: frame layout')
 
         const sessions = ctx.sessions
         const uiWorkspace = ctx.uiWorkspace
@@ -1704,9 +1793,8 @@ html[data-windows-titlebar] .dsh-tab-pagebar{top:var(--dsh-windows-titlebar-heig
           select(id) {
             activate(id)
           },
-          closeOne(id) {
+          closeOne(id, tabs) {
             try {
-              const tabs = tabsNow()
               const index = tabs.findIndex((tab) => tab.id === id)
               const next = tabs[index + 1]?.id ?? tabs[index - 1]?.id
               closeIds([id], next)
@@ -1714,17 +1802,11 @@ html[data-windows-titlebar] .dsh-tab-pagebar{top:var(--dsh-windows-titlebar-heig
               console.error('dsh-tab: closing tab failed', error)
             }
           },
-          closeRight(id) {
+          closeFollowing(id, following) {
             try {
-              const tabs = tabsNow()
-              const index = tabs.findIndex((tab) => tab.id === id)
-              if (index < 0) return
-              closeIds(
-                tabs.slice(index + 1).map((tab) => tab.id),
-                id,
-              )
+              closeIds(following.map((tab) => tab.id), id)
             } catch (error) {
-              console.error('dsh-tab: closing tabs to the right failed', error)
+              console.error('dsh-tab: closing following tabs failed', error)
             }
           },
           closeOthers(id) {
@@ -1774,7 +1856,7 @@ html[data-windows-titlebar] .dsh-tab-pagebar{top:var(--dsh-windows-titlebar-heig
           },
         }
 
-        const TabBar = createTabBar(actions)
+        const TabBars = createTabBars(actions)
         ctx.slots.inject('main', () => ctx.slots.register({ name: 'main', key: EMPTY_PANEL_ID },
           () => h('div', { 'data-dsh-tab-empty-main': '' }),
         ))
@@ -1788,7 +1870,7 @@ html[data-windows-titlebar] .dsh-tab-pagebar{top:var(--dsh-windows-titlebar-heig
               order: -100,
               locale: NS,
             },
-            TabBar,
+            TabBars,
           ),
         )
       },

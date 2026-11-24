@@ -138,10 +138,10 @@ body[data-ds-dark-theme] .mock-bubble-user{background:#25314a;color:#dbe6ff}
   -webkit-app-region:drag;
   --dsh-tab-max-width:180px}
 /* 抽屉悬浮在主列上方。标签栏只给原生侧栏按钮留空间。 */
-[data-sidebar-drawer] .dsh-tab-pagebar{left:var(--dsh-frame-leading-clearance, 0px)}
-html[data-windows-titlebar] .dsh-tab-pagebar{top:var(--dsh-windows-titlebar-height, 0px);
+[data-sidebar-drawer] .dsh-tab-pagebar:not([data-orientation=vertical]){left:var(--dsh-frame-leading-clearance, 0px)}
+html[data-windows-titlebar] .dsh-tab-pagebar:not([data-orientation=vertical]){top:var(--dsh-windows-titlebar-height, 0px);
   border-top-left-radius:var(--dsh-windows-content-radius, 16px);corner-shape:round}
-[data-rightbar-fullscreen] .dsh-tab-pagebar:not([data-main-empty=true]){display:none}
+[data-rightbar-fullscreen] .dsh-tab-pagebar:not([data-orientation=vertical]):not([data-main-empty=true]){display:none}
 .dsh-tab-pagebar__strip{display:flex;align-items:flex-end;flex:0 1 auto;min-width:0;
   height:100%;overflow-x:auto;overflow-y:hidden;scroll-padding-inline:8px;-webkit-app-region:no-drag}
 .dsh-tab-pagebar__strip::-webkit-scrollbar{height:6px}

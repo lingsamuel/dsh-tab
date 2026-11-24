@@ -1,6 +1,6 @@
 {
   "name": "dsh-tab",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Browser-style book tabs for DeepSeek Harness (DSH): one tab per conversation, workspace badges, drag reorder, pin / close / archive.",
   "type": "module",
   "license": "MIT",
@@ -65,7 +65,9 @@
         "@deepseek-ai/dsh-client-ui-conversation"
       ],
       "external": [
-        "react"
+        "react",
+        "react-dom",
+        "@deepseek-ai/dsh-client-ui-primitives"
       ]
     }
   }
