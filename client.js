@@ -68,6 +68,7 @@ window.__ModuleLoader__.load({
       'menu.closeBelow': '关闭下方标签页',
       'menu.closeOthers': '关闭其他标签页',
       'menu.closeAll': '关闭全部标签页',
+      'menu.closeWorkspace': '关闭此项目的所有标签页',
       'menu.pin': '固定标签页',
       'menu.unpin': '取消固定标签页',
       'menu.archive': '归档会话',
@@ -104,6 +105,7 @@ window.__ModuleLoader__.load({
       'menu.closeBelow': 'Close tabs below',
       'menu.closeOthers': 'Close other tabs',
       'menu.closeAll': 'Close all tabs',
+      'menu.closeWorkspace': 'Close all tabs in this project',
       'menu.pin': 'Pin tab',
       'menu.unpin': 'Unpin tab',
       'menu.archive': 'Archive conversation',
@@ -737,7 +739,7 @@ html[data-windows-titlebar] .dsh-tab-pagebar:not([data-orientation=vertical]){to
             if (target !== null && typeof target.closest === 'function' && target.closest('.dsh-tab-pagebar__close') !== null) return
             onDragStart(event)
           },
-          onContextMenu: (event) => onMenu(event, id),
+          onContextMenu: (event) => onMenu(event, { tabId: id }),
           onAuxClick: (event) => {
             if (event.button === 1) {
               event.preventDefault()
@@ -802,7 +804,7 @@ html[data-windows-titlebar] .dsh-tab-pagebar:not([data-orientation=vertical]){to
                 },
                 onContextMenu: (event) => {
                   event.preventDefault()
-                  onMenu(event, id)
+                  onMenu(event, { tabId: id })
                 },
                 onKeyDown: (event) => {
                   event.stopPropagation()
@@ -1191,23 +1193,23 @@ html[data-windows-titlebar] .dsh-tab-pagebar:not([data-orientation=vertical]){to
           }
         }, [vertical])
 
-        // 菜单指向的标签被关掉 / 归档后自动收起
+        const menuTab = tabs.find((tab) => tab.id === menu?.tabId)
+        const menuWorkspaceId = menu?.workspaceId ?? (vertical ? workspaceBadges.get(menuTab?.id)?.workspaceId : undefined)
+        const menuTabIsPanel = menuTab !== undefined && isPanelTab(menuTab.id)
+
+        // 标签或项目组从当前列表消失后自动收起菜单。
         useEffect(() => {
           if (menu === null) return
-          if (!tabs.some((tab) => tab.id === menu.tabId)) setMenu(null)
-        }, [menu, tabs])
+          if (!menu.trigger.isConnected || (menu.workspaceId === undefined && menuTab === undefined)) setMenu(null)
+        }, [menu, menuTab, workspaceGroupItems])
 
         const dismissMenu = useCallback(() => setMenu(null), [])
-        const openMenu = useCallback((event, tabId) => {
+        const openMenu = useCallback((event, target) => {
           event.preventDefault()
           event.stopPropagation()
-          const trigger = event.currentTarget.closest('[role="tab"]')
-          setMenu({ x: event.clientX, y: event.clientY, tabId, trigger, step: 'list', error: undefined })
+          const trigger = event.currentTarget.closest('[role="tab"]') ?? event.currentTarget
+          setMenu({ x: event.clientX, y: event.clientY, ...target, trigger, step: 'list', error: undefined })
         }, [])
-
-        const menuTabIndex = menu === null ? -1 : tabs.findIndex((tab) => tab.id === menu.tabId)
-        const menuTab = menuTabIndex < 0 ? undefined : tabs[menuTabIndex]
-        const menuTabIsPanel = menuTab !== undefined && isPanelTab(menuTab.id)
 
         const runMenu = (fn) => () => {
           dismissMenu()
@@ -1256,7 +1258,14 @@ html[data-windows-titlebar] .dsh-tab-pagebar:not([data-orientation=vertical]){to
         let menuHint
         let menuItems = []
         if (menu !== null) {
-          if (menu.step === 'busy') {
+          const workspaceItems = menuWorkspaceId === undefined ? [] : [{
+            key: 'close-workspace',
+            label: t('menu.closeWorkspace'),
+            run: runMenu(() => actions.closeWorkspace(menuWorkspaceId)),
+          }]
+          if (menu.workspaceId !== undefined) {
+            menuItems = workspaceItems
+          } else if (menu.step === 'busy') {
             menuHint = t('menu.archiveBusy')
           } else if (menu.step === 'error') {
             menuHint = t('menu.archiveFailed', { message: menu.error ?? '' })
@@ -1287,6 +1296,7 @@ html[data-windows-titlebar] .dsh-tab-pagebar:not([data-orientation=vertical]){to
                 disabled: otherCount === 0,
                 run: runMenu(() => actions.closeOthers(menuTab.id)),
               },
+              ...workspaceItems,
               { key: 'sep-1', separator: true },
               { key: 'close-all', label: t('menu.closeAll'), run: runMenu(() => actions.closeAll()) },
               { key: 'sep-2', separator: true },
@@ -1428,6 +1438,7 @@ html[data-windows-titlebar] .dsh-tab-pagebar:not([data-orientation=vertical]){to
                           : t('tab.workspaceGroupCollapse', { name: group.label }),
                         'aria-expanded': collapsed ? 'false' : 'true',
                         onPointerDown: (event) => event.stopPropagation(),
+                        onContextMenu: vertical ? (event) => openMenu(event, { workspaceId: group.workspaceId }) : undefined,
                         onClick: (event) => {
                           event.stopPropagation()
                           toggleCollapsedGroup(group.workspaceId)
@@ -1815,6 +1826,18 @@ html[data-windows-titlebar] .dsh-tab-pagebar:not([data-orientation=vertical]){to
               closeIds(closing, id)
             } catch (error) {
               console.error('dsh-tab: closing other tabs failed', error)
+            }
+          },
+          closeWorkspace(workspaceId) {
+            try {
+              // 用原生工作区成员关系匹配，包括显示在分组外的固定标签。
+              const workspace = ctx.workspaces.list.getSnapshot().items.find((item) => item.workspaceId === workspaceId)
+              if (workspace === undefined) return
+              const members = new Set(workspace.sessionIds)
+              const closing = tabsNow().filter((tab) => members.has(tab.id)).map((tab) => tab.id)
+              closeIds(closing, undefined)
+            } catch (error) {
+              console.error('dsh-tab: closing workspace tabs failed', error)
             }
           },
           closeAll() {
