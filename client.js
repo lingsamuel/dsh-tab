@@ -733,6 +733,10 @@ html[data-windows-titlebar] .dsh-tab-pagebar:not([data-orientation=vertical]){to
           'data-drop': drop === null || drop === undefined ? undefined : drop,
           title: pinned ? `${title} · ${t('tab.pinned')}` : title,
           onClick: () => onSelect(id),
+          onMouseDown: (event) => {
+            // 浏览器在中键按下时启动自动滚动，会吞掉松开时的 auxclick。
+            if (event.button === 1) event.preventDefault()
+          },
           onPointerDown: (event) => {
             if (event.button !== 0) return
             const target = event.target
